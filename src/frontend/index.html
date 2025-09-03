@@ -17,10 +17,6 @@
             <div class="header-content">
                 <h1><i class="icon-shield"></i> SHIELD Dashboard</h1>
                 <div class="header-status">
-                    <div class="health-indicator" id="systemHealth">
-                        <span class="health-status" id="healthStatus">NORMAL</span>
-                        <div class="health-dot" id="healthDot"></div>
-                    </div>
                     <div class="header-metrics">
                         <div class="header-metric">
                             <span class="metric-label">Active Devices</span>
@@ -34,6 +30,10 @@
                             <span class="metric-label">System Uptime</span>
                             <span class="metric-value" id="systemUptime">-</span>
                         </div>
+                    </div>
+                    <div class="health-indicator" id="systemHealth">
+                        <span class="health-status" id="healthStatus">NORMAL</span>
+                        <div class="health-dot" id="healthDot"></div>
                     </div>
                 </div>
             </div>
@@ -89,8 +89,8 @@
                                     <tr>
                                         <th>Topic</th>
                                         <th>Last Message</th>
-                                        <th>Timestamp</th>
                                         <th>Δt</th>
+                                        <th>Timestamp</th>
                                     </tr>
                                 </thead>
                                 <tbody id="mqttTopicsBody">

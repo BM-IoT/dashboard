@@ -149,13 +149,15 @@ class RevisedDashboardController {
         tableBody.innerHTML = Array.from(this.mqttTopics.entries()).map(([topic, data]) => {
             const timeDelta = this.formatTimeDelta(Date.now() - data.timestamp.getTime());
             const deltaClass = this.getTimeDeltaClass(Date.now() - data.timestamp.getTime());
+            const fullMessage = JSON.stringify(data.payload, null, 2);
+            const truncatedMessage = JSON.stringify(data.payload).substring(0, 50);
             
             return `
                 <tr>
                     <td class="mqtt-topic">${topic}</td>
-                    <td class="mqtt-payload" title="${JSON.stringify(data.payload)}">${JSON.stringify(data.payload).substring(0, 50)}...</td>
-                    <td>${data.timestamp.toLocaleString()}</td>
+                    <td class="mqtt-payload" title="${fullMessage.replace(/"/g, '&quot;')}">${truncatedMessage}${truncatedMessage.length < JSON.stringify(data.payload).length ? '...' : ''}</td>
                     <td class="time-delta ${deltaClass}">${timeDelta}</td>
+                    <td class="mqtt-timestamp">${data.timestamp.toLocaleString()}</td>
                 </tr>
             `;
         }).join('');

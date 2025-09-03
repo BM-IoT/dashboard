@@ -424,13 +424,38 @@ body {
 }
 
 /* MQTT Topics Table */
+#mqttTopicsTable {
+    table-layout: fixed;
+    width: 100%;
+}
+
+#mqttTopicsTable th:nth-child(1), /* Topic */
+#mqttTopicsTable td:nth-child(1) {
+    width: 25%;
+}
+
+#mqttTopicsTable th:nth-child(2), /* Last Message */
+#mqttTopicsTable td:nth-child(2) {
+    width: 50%;
+}
+
+#mqttTopicsTable th:nth-child(3), /* Δt */
+#mqttTopicsTable td:nth-child(3) {
+    width: 10%;
+}
+
+#mqttTopicsTable th:nth-child(4), /* Timestamp */
+#mqttTopicsTable td:nth-child(4) {
+    width: 15%;
+}
+
 .mqtt-topic {
     font-family: monospace;
     font-size: 0.9rem;
 }
 
 .mqtt-payload {
-    max-width: 200px;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -439,9 +464,16 @@ body {
     color: #666;
 }
 
+.mqtt-timestamp {
+    font-size: 0.75rem;
+    color: #888;
+    white-space: nowrap;
+}
+
 .time-delta {
     font-weight: 500;
     color: #667eea;
+    font-size: 0.8rem;
 }
 
 .time-delta.stale {
@@ -859,9 +891,24 @@ tr:hover {
 }
 
 /* Alarm History View */
+.alarm-overview-container {
+    display: grid;
+    grid-template-columns: 2fr 3fr;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.alarm-timeline-card {
+    min-height: 300px;
+}
+
+.alarm-stats-card {
+    min-height: 300px;
+}
+
 .alarm-stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(4, 1fr);
     gap: 1rem;
     margin-bottom: 2rem;
 }
@@ -914,6 +961,23 @@ tr:hover {
 .alarm-level.info {
     background: #e3f2fd;
     color: #1976d2;
+}
+
+/* Responsive design for alarm overview */
+@media (max-width: 1024px) {
+    .alarm-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    .alarm-overview-container {
+        grid-template-columns: 1fr;
+    }
+    
+    .alarm-stats {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* Form Controls */
