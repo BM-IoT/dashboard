@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+        <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.socket.io; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:5000 http://localhost:5000;">
+    <title>IoT Dashboard</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1><i class="icon-shield"></i> SHIELD Dashboard</h1>
+                <div class="header-status">
+                    <div class="health-indicator" id="systemHealth">
+                        <span class="health-status" id="healthStatus">NORMAL</span>
+                        <div class="health-dot" id="healthDot"></div>
+                    </div>
+                    <div class="header-metrics">
+                        <div class="header-metric">
+                            <span class="metric-label">Active Devices</span>
+                            <span class="metric-value" id="activeDevices">-</span>
+                        </div>
+                        <div class="header-metric">
+                            <span class="metric-label">Critical Alarms</span>
+                            <span class="metric-value critical" id="criticalAlarms">-</span>
+                        </div>
+                        <div class="header-metric">
+                            <span class="metric-label">System Uptime</span>
+                            <span class="metric-value" id="systemUptime">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="nav">
+            <div class="nav-content">
+                <a href="#" class="nav-item active" data-view="dashboard">
+                    <i class="icon-dashboard"></i> Dashboard
+                </a>
+                <a href="#" class="nav-item" data-view="devices">
+                    <i class="icon-devices"></i> Devices
+                </a>
+                <a href="#" class="nav-item" data-view="sensor-history">
+                    <i class="icon-history"></i> Sensor History
+                </a>
+                <a href="#" class="nav-item" data-view="alarm-history">
+                    <i class="icon-alarms"></i> Alarm History
+                </a>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Dashboard View - Live System State -->
+            <div id="dashboardView" class="view active">
+                <!-- Sensor/Alarm Cards -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="icon-sensors"></i> Device Status</h3>
+                        <span class="last-update">Last updated: <span id="lastUpdate">-</span></span>
+                    </div>
+                    <div class="card-content">
+                        <div id="deviceCards" class="device-cards-grid">
+                            <!-- Device cards will be populated here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MQTT Topics Table -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="icon-mqtt"></i> MQTT Topics Monitor</h3>
+                        <div class="header-controls">
+                            <button class="btn btn-sm" id="refreshMqttBtn">Refresh</button>
+                        </div>
+                    </div>
+                    <div class="card-content">
+                        <div class="table-container">
+                            <table id="mqttTopicsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Topic</th>
+                                        <th>Last Message</th>
+                                        <th>Timestamp</th>
+                                        <th>Δt</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="mqttTopicsBody">
+                                    <!-- MQTT topics will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Devices View - Network Overview -->
+            <div id="devicesView" class="view">
+                <div class="view-header">
+                    <h2><i class="icon-devices"></i> Network Overview</h2>
+                    <div class="view-controls">
+                        <select id="deviceTypeFilter">
+                            <option value="">All Types</option>
+                            <option value="sensor">Sensors</option>
+                            <option value="alarm">Alarms</option>
+                        </select>
+                        <select id="deviceStatusFilter">
+                            <option value="">All Status</option>
+                            <option value="online">Online</option>
+                            <option value="offline">Offline</option>
+                        </select>
+                        <input type="text" id="deviceSearch" placeholder="Search devices...">
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-content">
+                        <div class="table-container">
+                            <table id="devicesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Device ID</th>
+                                        <th>Name</th>
+                                        <th>Location</th>
+                                        <th>Type</th>
+                                        <th>Status</th>
+                                        <th>Last Seen</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="devicesTableBody">
+                                    <!-- Devices will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sensor History View -->
+            <div id="sensor-historyView" class="view">
+                <div class="view-header">
+                    <h2><i class="icon-history"></i> Sensor History</h2>
+                    <div class="view-controls">
+                        <select id="sensorTypeSelect">
+                            <option value="">All Sensor Types</option>
+                            <option value="humidity">Moisture</option>
+                            <option value="vibration">Vibration</option>
+                            <option value="stress">Strain</option>
+                        </select>
+                        <select id="dateRangeSelect">
+                            <option value="day">Last Day</option>
+                            <option value="week" selected>Last Week</option>
+                            <option value="month">Last Month</option>
+                            <option value="custom">Custom Range</option>
+                        </select>
+                        <input type="date" id="customStartDate" style="display: none;">
+                        <input type="date" id="customEndDate" style="display: none;">
+                        <select id="deviceSelect" multiple>
+                            <!-- Will be populated with devices -->
+                        </select>
+                        <button class="btn btn-primary" id="exportDataBtn">Export CSV</button>
+                    </div>
+                </div>
+                
+                <!-- Chart containers for each sensor type -->
+                <div class="charts-container">
+                    <div class="card chart-card" id="humidityChartCard">
+                        <div class="card-header">
+                            <h3>Moisture Sensors</h3>
+                            <span class="chart-info" id="humidityInfo">-</span>
+                        </div>
+                        <div class="card-content">
+                            <canvas id="humidityChart" height="300"></canvas>
+                        </div>
+                    </div>
+                    
+                    <div class="card chart-card" id="vibrationChartCard">
+                        <div class="card-header">
+                            <h3>Vibration Sensors</h3>
+                            <span class="chart-info" id="vibrationInfo">-</span>
+                        </div>
+                        <div class="card-content">
+                            <canvas id="vibrationChart" height="300"></canvas>
+                        </div>
+                    </div>
+                    
+                    <div class="card chart-card" id="stressChartCard">
+                        <div class="card-header">
+                            <h3>Strain Sensors</h3>
+                            <span class="chart-info" id="stressInfo">-</span>
+                        </div>
+                        <div class="card-content">
+                            <canvas id="stressChart" height="300"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Alarm History View -->
+            <div id="alarm-historyView" class="view">
+                <div class="view-header">
+                    <h2><i class="icon-alarms"></i> Alarm History</h2>
+                    <div class="view-controls">
+                        <select id="alarmDateRange">
+                            <option value="day">Last Day</option>
+                            <option value="week" selected>Last Week</option>
+                            <option value="month">Last Month</option>
+                        </select>
+                        <select id="alarmDeviceFilter">
+                            <option value="">All Devices</option>
+                            <!-- Will be populated with device IDs -->
+                        </select>
+                        <select id="alarmLevelFilter">
+                            <option value="">All Levels</option>
+                            <option value="critical">Critical</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                        </select>
+                        <button class="btn btn-primary" id="exportAlarmsBtn">Export CSV</button>
+                    </div>
+                </div>
+
+                <!-- Alarm Timeline -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Alarm Timeline</h3>
+                    </div>
+                    <div class="card-content">
+                        <canvas id="alarmTimelineChart" height="200"></canvas>
+                    </div>
+                </div>
+
+                <!-- Alarm Statistics -->
+                <div class="stats-container">
+                    <div class="card stats-card">
+                        <div class="card-header">
+                            <h3>Statistics Summary</h3>
+                        </div>
+                        <div class="card-content">
+                            <div id="alarmStats" class="alarm-stats">
+                                <!-- Statistics will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detailed Alarm History Table -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Detailed History</h3>
+                    </div>
+                    <div class="card-content">
+                        <div class="table-container">
+                            <table id="alarmHistoryTable">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>Device ID</th>
+                                        <th>Level</th>
+                                        <th>Message</th>
+                                        <th>Duration</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="alarmHistoryBody">
+                                    <!-- Alarm history will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Connection Status -->
+        <div id="connectionStatus" class="connection-status">
+            <span id="statusText">Connecting...</span>
+            <div class="status-indicator" id="statusIndicator"></div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Loading...</div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/api.js"></script>
+    <script src="js/charts.js"></script>
+    <script src="js/revised-dashboard.js"></script>
+    <script src="js/view-controllers.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
