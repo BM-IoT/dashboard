@@ -512,7 +512,7 @@ class AlarmHistoryController {
             },
             plugins: {
                 title: {
-                    display: true,
+                    display: false,
                     text: 'Alarm Timeline'
                 }
             }
