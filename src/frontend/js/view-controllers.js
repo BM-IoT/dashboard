@@ -169,6 +169,8 @@ class SensorHistoryController {
         this.charts = {};
         this.sensorTypes = ['humidity', 'vibration', 'stress'];
         this.devices = [];
+        this.updateThrottle = new Map(); // Throttle updates per device
+        this.throttleDelay = 1000; // 1 second throttle
     }
 
     async init() {
@@ -224,6 +226,11 @@ class SensorHistoryController {
         if (exportBtn) {
             exportBtn.addEventListener('click', () => this.exportData());
         }
+
+        // Real-time updates
+        window.addEventListener('sensorUpdate', (event) => {
+            this.handleSensorUpdate(event.detail);
+        });
     }
 
     initializeCharts() {
@@ -352,6 +359,75 @@ class SensorHistoryController {
         alert('Export functionality would generate CSV with current chart data');
         // In a real implementation, this would collect all visible chart data and generate a CSV file
     }
+
+    handleSensorUpdate(data) {
+        // Check if this update is for a sensor we're currently displaying
+        const selectedDevices = Array.from(document.getElementById('deviceSelect')?.selectedOptions || [])
+            .map(option => option.value);
+        
+        // If no devices selected, show all, otherwise only show selected
+        const shouldUpdate = selectedDevices.length === 0 || selectedDevices.includes(data.sensor_id);
+        
+        if (!shouldUpdate) return;
+
+        // Skip if view is not active to save resources
+        if (document.getElementById('sensor-historyView')?.style.display === 'none') return;
+
+        // Throttle updates to prevent excessive chart redraws
+        const now = Date.now();
+        const lastUpdate = this.updateThrottle.get(data.sensor_id) || 0;
+        
+        if (now - lastUpdate < this.throttleDelay) {
+            return; // Skip this update due to throttling
+        }
+        
+        this.updateThrottle.set(data.sensor_id, now);
+
+        // Find the device that matches this update
+        const device = this.devices.find(d => d.sensor_id === data.sensor_id);
+        if (!device) return;
+
+        // Add new data point to the appropriate chart
+        const sensorType = device.sensor_type;
+        const chart = this.charts[sensorType];
+        
+        if (chart) {
+            // Find the dataset for this device
+            let dataset = chart.data.datasets.find(d => d.label === data.sensor_id);
+            
+            if (!dataset) {
+                // Create new dataset if it doesn't exist
+                dataset = {
+                    label: data.sensor_id,
+                    data: [],
+                    borderColor: this.getColorForDevice(data.sensor_id),
+                    backgroundColor: this.getColorForDevice(data.sensor_id) + '20',
+                    fill: false,
+                    tension: 0.1
+                };
+                chart.data.datasets.push(dataset);
+            }
+
+            // Add new data point
+            const newPoint = {
+                x: new Date(data.timestamp),
+                y: data.value || data.data?.value || 0 // Handle different data structures
+            };
+            
+            dataset.data.push(newPoint);
+
+            // Keep only recent data points (e.g., last 1000 points)
+            if (dataset.data.length > 1000) {
+                dataset.data = dataset.data.slice(-1000);
+            }
+
+            // Sort data by timestamp to maintain order
+            dataset.data.sort((a, b) => a.x.getTime() - b.x.getTime());
+
+            // Update the chart with animation disabled for better performance
+            chart.update('none');
+        }
+    }
 }
 
 // Alarm History Controller
@@ -359,6 +435,8 @@ class AlarmHistoryController {
     constructor() {
         this.alarms = [];
         this.timelineChart = null;
+        this.lastUpdate = 0;
+        this.updateThrottle = 2000; // 2 second throttle for alarm updates
     }
 
     async init() {
@@ -395,6 +473,11 @@ class AlarmHistoryController {
 
         // Populate device filter
         this.populateDeviceFilter();
+
+        // Real-time updates
+        window.addEventListener('alarmUpdate', (event) => {
+            this.handleAlarmUpdate(event.detail);
+        });
     }
 
     populateDeviceFilter() {
@@ -551,6 +634,38 @@ class AlarmHistoryController {
 
     exportAlarms() {
         alert('Alarm export functionality would generate CSV with alarm history data');
+    }
+
+    handleAlarmUpdate(data) {
+        // Add new alarm to the beginning of the array
+        this.alarms.unshift({
+            timestamp: data.timestamp,
+            sensor_id: data.sensor_id,
+            level: data.level || data.alarm?.level || 'warning',
+            message: data.message || data.alarm?.message || 'Alarm triggered',
+            acknowledged: false
+        });
+
+        // Keep only recent alarms (e.g., last 1000)
+        if (this.alarms.length > 1000) {
+            this.alarms = this.alarms.slice(0, 1000);
+        }
+
+        // Throttle UI updates to prevent excessive redraws
+        const now = Date.now();
+        if (now - this.lastUpdate < this.updateThrottle) {
+            return; // Skip UI update due to throttling
+        }
+        this.lastUpdate = now;
+
+        // Update components if currently in alarm history view
+        const alarmHistoryView = document.getElementById('alarm-historyView');
+        if (alarmHistoryView?.style.display !== 'none') {
+            this.updateAlarmStats();
+            this.updateTimelineChart();
+            this.renderAlarmTable();
+            this.populateDeviceFilter(); // Update device filter with new devices
+        }
     }
 }
 
