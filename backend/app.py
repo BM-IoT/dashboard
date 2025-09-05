@@ -154,6 +154,28 @@ def start_mqtt():
         print("Note: MQTT broker not available. Dashboard will work without real-time sensor data.")
 
 # API Routes
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for application startup"""
+    try:
+        # Test database connection
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1')
+        conn.close()
+        
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'database': 'connected'
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'timestamp': datetime.now().isoformat(),
+            'error': str(e)
+        }), 500
+
 @app.route('/api/sensors', methods=['GET'])
 def get_sensors():
     """Get all sensors"""
