@@ -15,8 +15,14 @@
         <!-- Header -->
         <header class="header">
             <div class="header-content">
-                <h1><i class="icon-shield"></i> SHIELD Dashboard</h1>
-                <div class="header-status">
+                <div class="header-left">
+                    <h1><i class="icon-shield"></i> SHIELD Dashboard</h1>
+                    <div class="health-indicator" id="systemHealth">
+                        <span class="health-status" id="healthStatus">NORMAL</span>
+                        <div class="health-dot" id="healthDot"></div>
+                    </div>
+                </div>
+                <div class="header-center">
                     <div class="header-metrics">
                         <div class="header-metric">
                             <span class="metric-label">Active Devices</span>
@@ -31,9 +37,11 @@
                             <span class="metric-value" id="systemUptime">-</span>
                         </div>
                     </div>
-                    <div class="health-indicator" id="systemHealth">
-                        <span class="health-status" id="healthStatus">NORMAL</span>
-                        <div class="health-dot" id="healthDot"></div>
+                </div>
+                <div class="header-right">
+                    <div class="header-time">
+                        <span class="time-label">Current Time</span>
+                        <span class="time-value" id="currentTime">--:--:--</span>
                     </div>
                 </div>
             </div>

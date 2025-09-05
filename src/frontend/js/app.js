@@ -43,10 +43,37 @@ class IoTDashboard {
             // Hide loading overlay
             this.hideLoadingOverlay();
             
+            // Start time updates
+            this.startTimeUpdate();
+            
         } catch (error) {
             console.error('Failed to initialize dashboard:', error);
             this.showError('Failed to initialize dashboard. Please check the connection.');
             this.hideLoadingOverlay();
+        }
+    }
+
+    startTimeUpdate() {
+        // Update time immediately
+        this.updateCurrentTime();
+        
+        // Update time every second
+        setInterval(() => {
+            this.updateCurrentTime();
+        }, 1000);
+    }
+
+    updateCurrentTime() {
+        const timeElement = document.getElementById('currentTime');
+        if (timeElement) {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-GB', {
+                hour12: false,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            timeElement.textContent = timeString;
         }
     }
 
