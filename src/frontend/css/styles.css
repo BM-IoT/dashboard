@@ -16,10 +16,10 @@ body {
 .icon-shield::before { content: '🛡️'; }
 .icon-dashboard::before { content: '📊'; }
 .icon-devices::before { content: '🔗'; }
-.icon-history::before { content: '�'; }
+.icon-history::before { content: '📜'; }
 .icon-alarms::before { content: '🚨'; }
 .icon-status::before { content: '⚡'; }
-.icon-sensors::before { content: '📡'; }
+.icon-sensors::before { content: '🔋'; }
 .icon-mqtt::before { content: '📡'; }
 .icon-chart::before { content: '📊'; }
 

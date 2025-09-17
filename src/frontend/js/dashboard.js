@@ -250,7 +250,7 @@ class DashboardController {
             });
             
             this.updateDeviceCards();
-        }, 30000);
+        }, 10000);
     }
 
     showDeviceDetails(deviceId) {

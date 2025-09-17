@@ -16,7 +16,7 @@
         <header class="header">
             <div class="header-content">
                 <div class="header-left">
-                    <h1><i class="icon-shield"></i> SHIELD Dashboard</h1>
+                    <h1><p class="icon-shield"></p> SHIELD Dashboard</h1>
                     <div class="health-indicator" id="systemHealth">
                         <span class="health-status" id="healthStatus">NORMAL</span>
                         <div class="health-dot" id="healthDot"></div>
@@ -51,16 +51,16 @@
         <nav class="nav">
             <div class="nav-content">
                 <a href="#" class="nav-item active" data-view="dashboard">
-                    <i class="icon-dashboard"></i> Dashboard
+                    <p class="icon-dashboard"></p> Dashboard
                 </a>
                 <a href="#" class="nav-item" data-view="devices">
-                    <i class="icon-devices"></i> Devices
+                    <p class="icon-devices"></p> Devices
                 </a>
                 <a href="#" class="nav-item" data-view="sensor-history">
-                    <i class="icon-history"></i> Sensor History
+                    <p class="icon-history"></p> Sensor History
                 </a>
                 <a href="#" class="nav-item" data-view="alarm-history">
-                    <i class="icon-alarms"></i> Alarm History
+                    <p class="icon-alarms"></p> Alarm History
                 </a>
             </div>
         </nav>
@@ -72,7 +72,7 @@
                 <!-- Sensor/Alarm Cards -->
                 <div class="card">
                     <div class="card-header">
-                        <h3><i class="icon-sensors"></i> Device Status</h3>
+                        <h3><p class="icon-sensors"></p> Device Status</h3>
                         <span class="last-update">Last updated: <span id="lastUpdate">-</span></span>
                     </div>
                     <div class="card-content">
@@ -85,7 +85,7 @@
                 <!-- MQTT Topics Table -->
                 <div class="card">
                     <div class="card-header">
-                        <h3><i class="icon-mqtt"></i> MQTT Topics Monitor</h3>
+                        <h3><p class="icon-mqtt"></p> MQTT Topics Monitor</h3>
                         <div class="header-controls">
                             <button class="btn btn-sm" id="refreshMqttBtn">Refresh</button>
                         </div>
@@ -113,7 +113,7 @@
             <!-- Devices View - Network Overview -->
             <div id="devicesView" class="view">
                 <div class="view-header">
-                    <h2><i class="icon-devices"></i> Network Overview</h2>
+                    <h2><p class="icon-devices"></p> Network Overview</h2>
                     <div class="view-controls">
                         <select id="deviceTypeFilter">
                             <option value="">All Types</option>
@@ -155,7 +155,7 @@
             <!-- Sensor History View -->
             <div id="sensor-historyView" class="view">
                 <div class="view-header">
-                    <h2><i class="icon-history"></i> Sensor History</h2>
+                    <h2><p class="icon-history"></p> Sensor History</h2>
                     <div class="view-controls">
                         <select id="sensorTypeSelect">
                             <option value="">All Sensor Types</option>
@@ -215,7 +215,7 @@
             <!-- Alarm History View -->
             <div id="alarm-historyView" class="view">
                 <div class="view-header">
-                    <h2><i class="icon-alarms"></i> Alarm History</h2>
+                    <h2><p class="icon-alarms"></p> Alarm History</h2>
                     <div class="view-controls">
                         <select id="alarmDateRange">
                             <option value="day">Last Day</option>
