@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "concurrently \"npm run start-backend\" \"npm run start-electron\"",
-    "start-backend": "cd backend && /home/vuk/Documents/faks/6_semestar/IoT/dashboard/.venv/bin/python app.py",
+    "start-backend": "cd backend && ../.venv/bin/python app.py",
     "start-electron": "electron . --dev",
     "build": "electron-builder",
     "build-backend": "cd backend && python -m pip install -r requirements.txt",
