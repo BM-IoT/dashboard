@@ -17,7 +17,7 @@ class IoTDashboard {
             window.chartManager = this.chartManager;
             
             // Initialize view controllers
-            this.controllers.dashboard = new RevisedDashboardController();
+            this.controllers.dashboard = new DashboardController();
             this.controllers.devices = new DevicesController();
             this.controllers.sensorHistory = new SensorHistoryController();
             this.controllers.alarmHistory = new AlarmHistoryController();

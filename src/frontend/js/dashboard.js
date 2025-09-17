@@ -1,5 +1,5 @@
-// Revised Dashboard Controller - Live System State
-class RevisedDashboardController {
+// Dashboard Controller - Live System State
+class DashboardController {
     constructor() {
         this.devices = [];
         this.mqttTopics = new Map();
@@ -155,7 +155,7 @@ class RevisedDashboardController {
             return `
                 <tr>
                     <td class="mqtt-topic">${topic}</td>
-                    <td class="mqtt-payload" title="${fullMessage.replace(/"/g, '&quot;')}">${truncatedMessage}${truncatedMessage.length < JSON.stringify(data.payload).length ? '...' : ''}</td>
+                    <td class="mqtt-payload" title="${fullMessage.replace(/\"/g, '&quot;')}">${truncatedMessage}${truncatedMessage.length < JSON.stringify(data.payload).length ? '...' : ''}</td>
                     <td class="time-delta ${deltaClass}">${timeDelta}</td>
                     <td class="mqtt-timestamp">${data.timestamp.toLocaleString()}</td>
                 </tr>
@@ -309,5 +309,5 @@ class RevisedDashboardController {
     }
 }
 
-// Create global revised dashboard instance
-window.revisedDashboard = new RevisedDashboardController();
+// Create global dashboard instance
+window.dashboard = new DashboardController();
