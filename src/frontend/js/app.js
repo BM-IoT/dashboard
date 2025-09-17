@@ -28,8 +28,28 @@ class IoTDashboard {
             window.sensorHistoryController = this.controllers.sensorHistory;
             window.alarmHistoryController = this.controllers.alarmHistory;
 
-            // Connect to backend
-            await this.connectSocket();
+            if (!window.api) {
+                throw new Error('API instance not found. Ensure api.js is loaded before app.js');
+            }
+            
+            // Initialize API and connect to backend (socket moved to API)
+            await window.api.init();
+            try {
+                await window.api.connect();
+            } catch (err) {
+                console.error('Failed to connect via API:', err);
+                this.showError('Failed to connect to backend. Please check the connection.');
+            }
+
+            // Listen to API connection status events to show toasts
+            window.addEventListener('connectionStatus', (e) => {
+                const { status, message } = e.detail || {};
+                if (status === 'connected') {
+                    this.showSuccess(message || 'Connected');
+                } else if (status === 'disconnected' || status === 'error') {
+                    this.showError(message || 'Disconnected');
+                }
+            });
             
             // Setup navigation
             this.setupNavigation();
@@ -128,52 +148,6 @@ class IoTDashboard {
             console.error(`Failed to show ${viewName} view:`, error);
             this.showError(`Failed to load ${viewName} view`);
         }
-    }
-
-    async connectSocket() {
-        return new Promise((resolve, reject) => {
-            // Set initial connecting status
-            if (window.api && window.api.updateConnectionStatus) {
-                window.api.updateConnectionStatus('connecting', 'Connecting...');
-            }
-            
-            this.socket = io('http://localhost:5000');
-            
-            this.socket.on('connect', () => {
-                console.log('Connected to backend');
-                // Update connection status
-                if (window.api && window.api.updateConnectionStatus) {
-                    window.api.updateConnectionStatus('connected', 'Connected');
-                }
-                resolve();
-            });
-            
-            this.socket.on('disconnect', () => {
-                console.log('Disconnected from backend');
-                // Update connection status
-                if (window.api && window.api.updateConnectionStatus) {
-                    window.api.updateConnectionStatus('disconnected', 'Connection lost. Attempting to reconnect...');
-                }
-                this.showError('Connection lost. Attempting to reconnect...');
-            });
-            
-            this.socket.on('sensor_update', (data) => {
-                console.log('Received sensor data:', data);
-                // Broadcast to all controllers
-                window.dispatchEvent(new CustomEvent('sensorUpdate', { detail: data }));
-            });
-
-            this.socket.on('alarm_update', (data) => {
-                console.log('Received alarm:', data);
-                // Broadcast alarm event
-                window.dispatchEvent(new CustomEvent('alarmUpdate', { detail: data }));
-            });
-            
-            this.socket.on('connect_error', (error) => {
-                console.error('Socket connection error:', error);
-                reject(error);
-            });
-        });
     }
 
     showError(message) {

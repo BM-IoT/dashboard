@@ -17,8 +17,83 @@ class API {
             }
         }
 
-        // Initialize Socket.IO connection
-        this.initSocket();
+        // Prepare socket (but don't auto-connect) — use connect() to start
+        this.socket = null;
+        this.isConnected = false;
+    }
+
+    // Create the socket instance but don't connect automatically
+    createSocket() {
+        if (this.socket) return this.socket;
+
+        const socketURL = this.baseURL.replace('/api', '');
+        // Create socket with autoConnect false so we can control connection lifecycle
+        this.socket = io(socketURL, { autoConnect: false });
+
+        // Wire socket events
+        this.socket.on('connect', () => {
+            console.log('Connected to backend (API)');
+            this.isConnected = true;
+            this.updateConnectionStatus('connected', 'Connected');
+            // Emit a global event for other parts of the app
+            window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'connected', message: 'Connected' } }));
+        });
+
+        this.socket.on('disconnect', (reason) => {
+            console.log('Disconnected from backend (API)', reason);
+            this.isConnected = false;
+            this.updateConnectionStatus('disconnected', 'Disconnected');
+            window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'disconnected', message: 'Disconnected' } }));
+        });
+
+        this.socket.on('connect_error', (error) => {
+            console.error('Connection error (API):', error);
+            this.isConnected = false;
+            this.updateConnectionStatus('error', 'Connection Error');
+            window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'error', message: 'Connection Error', error } }));
+        });
+
+        // Forward domain events
+        this.socket.on('sensor_update', (data) => this.onSensorUpdate(data));
+        this.socket.on('alarm_update', (data) => this.onAlarmUpdate(data));
+
+        return this.socket;
+    }
+
+    // Connect to the backend socket; returns a Promise that resolves on successful connect
+    connect() {
+        return new Promise((resolve, reject) => {
+            try {
+                const socket = this.createSocket();
+                // Handle immediate connect state
+                if (socket.connected) {
+                    this.isConnected = true;
+                    this.updateConnectionStatus('connected', 'Connected');
+                    resolve();
+                    return;
+                }
+
+                socket.once('connect', () => resolve());
+                socket.once('connect_error', (err) => reject(err));
+
+                socket.connect();
+                this.updateConnectionStatus('connecting', 'Connecting...');
+                window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'connecting', message: 'Connecting...' } }));
+            } catch (err) {
+                reject(err);
+            }
+        });
+    }
+
+    // Graceful disconnect
+    disconnect() {
+        if (this.socket) {
+            this.socket.disconnect();
+            this.socket = null;
+            this.isConnected = false;
+            this.updateConnectionStatus('disconnected', 'Disconnected');
+            window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'disconnected', message: 'Disconnected' } }));
+        }
     }
 
     initSocket() {
