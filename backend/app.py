@@ -1,63 +1,40 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
-import sqlite3
 import json
+from collections import deque
 import paho.mqtt.client as mqtt
 import threading
 from datetime import datetime
-import os
 
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Database setup
-DATABASE = 'shield_dashboard.db'
+# In-memory stores (thread-safe)
+# sensors: sensor_id -> {sensor_id, sensor_type, location, status}
+sensors = {}
+# sensor_data: sensor_id -> deque of {'value', 'timestamp'} (bounded)
+sensor_data = {}
+# alarms: deque of {'id', 'sensor_id', 'alarm_type', 'level', 'message', 'timestamp', 'acknowledged'} (bounded)
+alarms = None
+# simple alarm id counter
+alarm_id_counter = 1
+# lock to protect concurrent access
+data_lock = threading.Lock()
 
-def init_db():
-    """Initialize the database with required tables"""
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    
-    # Sensors table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sensors (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sensor_id TEXT UNIQUE,
-            sensor_type TEXT,
-            location TEXT,
-            status TEXT DEFAULT 'active'
-        )
-    ''')
-    
-    # Sensor data table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sensor_data (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sensor_id TEXT,
-            value REAL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (sensor_id) REFERENCES sensors (sensor_id)
-        )
-    ''')
-    
-    # Alarms table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS alarms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sensor_id TEXT,
-            alarm_type TEXT,
-            level TEXT,
-            message TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            acknowledged BOOLEAN DEFAULT FALSE,
-            FOREIGN KEY (sensor_id) REFERENCES sensors (sensor_id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+# Size limits
+SENSOR_DATA_MAXLEN = 10000
+ALARMS_MAXLEN = 1000
+
+def init_data():
+    """Initialize in-memory data stores."""
+    global sensors, sensor_data, alarms, alarm_id_counter
+    with data_lock:
+        sensors = {}
+        sensor_data = {}
+        alarms = deque(maxlen=ALARMS_MAXLEN)
+        alarm_id_counter = 1
 
 # MQTT Configuration
 MQTT_BROKER = "localhost"
@@ -90,51 +67,69 @@ def on_message(client, userdata, msg):
         print(f"Topic: {msg.topic}, Raw payload: {msg.payload}")
 
 def handle_sensor_data(sensor_id, data):
-    """Store sensor data in database and emit to frontend"""
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    
-    # Insert or update sensor
-    cursor.execute('''
-        INSERT OR IGNORE INTO sensors (sensor_id, sensor_type, location)
-        VALUES (?, ?, ?)
-    ''', (sensor_id, data.get('type', 'unknown'), data.get('location', 'unknown')))
-    
-    # Insert sensor data
-    cursor.execute('''
-        INSERT INTO sensor_data (sensor_id, value)
-        VALUES (?, ?)
-    ''', (sensor_id, data.get('value', 0)))
-    
-    conn.commit()
-    conn.close()
-    
+    """Store sensor data in memory and emit to frontend"""
+    global sensors, sensor_data
+    timestamp = datetime.now().isoformat()
+    new_sensor_meta = None
+    with data_lock:
+        # Insert or update sensor
+        if sensor_id not in sensors:
+            sensors[sensor_id] = {
+                'sensor_id': sensor_id,
+                'sensor_type': data.get('type', 'unknown'),
+                'location': data.get('location', 'unknown'),
+                'status': 'active'
+            }
+            # capture metadata to broadcast after releasing lock
+            new_sensor_meta = sensors[sensor_id].copy()
+
+        # Append sensor data into a bounded deque
+        if sensor_id not in sensor_data:
+            sensor_data[sensor_id] = deque(maxlen=SENSOR_DATA_MAXLEN)
+        sensor_data[sensor_id].append({
+            'value': data.get('value', 0),
+            'timestamp': timestamp
+        })
+
     # Emit to frontend via WebSocket
     socketio.emit('sensor_update', {
         'sensor_id': sensor_id,
         'data': data,
-        'timestamp': datetime.now().isoformat()
+        'timestamp': timestamp
     })
+    # If this was a newly observed sensor, emit a dedicated event so frontends
+    # can react to a sensor coming online (e.g., add to lists immediately).
+    if new_sensor_meta is not None:
+        try:
+            new_sensor_meta['first_seen'] = timestamp
+            socketio.emit('sensor_connected', new_sensor_meta)
+            print(f"Emitted sensor_connected for {sensor_id}")
+        except Exception as e:
+            print(f"Failed to emit sensor_connected event: {e}")
 
 def handle_alarm(sensor_id, alarm_data):
-    """Store alarm in database and emit to frontend"""
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        INSERT INTO alarms (sensor_id, alarm_type, level, message)
-        VALUES (?, ?, ?, ?)
-    ''', (sensor_id, alarm_data.get('type', 'unknown'), 
-          alarm_data.get('level', 'info'), alarm_data.get('message', '')))
-    
-    conn.commit()
-    conn.close()
-    
+    """Store alarm in memory and emit to frontend"""
+    global alarms, alarm_id_counter
+    timestamp = datetime.now().isoformat()
+    with data_lock:
+        alarm = {
+            'id': alarm_id_counter,
+            'sensor_id': sensor_id,
+            'alarm_type': alarm_data.get('type', 'unknown'),
+            'level': alarm_data.get('level', 'info'),
+            'message': alarm_data.get('message', ''),
+            'timestamp': timestamp,
+            'acknowledged': False
+        }
+        # newest first: appendleft
+        alarms.appendleft(alarm)
+        alarm_id_counter += 1
+
     # Emit to frontend via WebSocket
     socketio.emit('alarm_update', {
         'sensor_id': sensor_id,
-        'alarm': alarm_data,
-        'timestamp': datetime.now().isoformat()
+        'alarm': alarm,
+        'timestamp': timestamp
     })
 
 # Initialize MQTT client
@@ -158,16 +153,11 @@ def start_mqtt():
 def health_check():
     """Health check endpoint for application startup"""
     try:
-        # Test database connection
-        conn = sqlite3.connect(DATABASE)
-        cursor = conn.cursor()
-        cursor.execute('SELECT 1')
-        conn.close()
-        
+        # In-memory stores are initialized
         return jsonify({
             'status': 'healthy',
             'timestamp': datetime.now().isoformat(),
-            'database': 'connected'
+            'storage': 'in-memory'
         }), 200
     except Exception as e:
         return jsonify({
@@ -179,108 +169,74 @@ def health_check():
 @app.route('/api/sensors', methods=['GET'])
 def get_sensors():
     """Get all sensors"""
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM sensors')
-    sensors = cursor.fetchall()
-    conn.close()
-    
-    return jsonify([{
-        'id': sensor[0],
-        'sensor_id': sensor[1],
-        'sensor_type': sensor[2],
-        'location': sensor[3],
-        'status': sensor[4]
-    } for sensor in sensors])
+    with data_lock:
+        result = [
+            {
+                'sensor_id': s['sensor_id'],
+                'sensor_type': s.get('sensor_type'),
+                'location': s.get('location'),
+                'status': s.get('status', 'active')
+            }
+            for s in sensors.values()
+        ]
+    return jsonify(result)
 
 @app.route('/api/sensors/<sensor_id>/data', methods=['GET'])
 def get_sensor_data(sensor_id):
     """Get sensor data with optional time range"""
     limit = request.args.get('limit', 100, type=int)
-    
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT value, timestamp FROM sensor_data 
-        WHERE sensor_id = ? 
-        ORDER BY timestamp DESC 
-        LIMIT ?
-    ''', (sensor_id, limit))
-    data = cursor.fetchall()
-    conn.close()
-    
-    return jsonify([{
-        'value': row[0],
-        'timestamp': row[1]
-    } for row in data])
+    with data_lock:
+        entries = list(sensor_data.get(sensor_id, []))
+
+    # return most recent first
+    entries = sorted(entries, key=lambda e: e['timestamp'], reverse=True)
+    return jsonify(entries[:limit])
 
 @app.route('/api/alarms', methods=['GET'])
 def get_alarms():
     """Get all alarms"""
     limit = request.args.get('limit', 50, type=int)
     acknowledged = request.args.get('acknowledged', None)
-    
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    
-    query = 'SELECT * FROM alarms'
-    params = []
-    
+    with data_lock:
+        filtered = list(alarms)
+
     if acknowledged is not None:
-        query += ' WHERE acknowledged = ?'
-        params.append(acknowledged.lower() == 'true')
-    
-    query += ' ORDER BY timestamp DESC LIMIT ?'
-    params.append(limit)
-    
-    cursor.execute(query, params)
-    alarms = cursor.fetchall()
-    conn.close()
-    
-    return jsonify([{
-        'id': alarm[0],
-        'sensor_id': alarm[1],
-        'alarm_type': alarm[2],
-        'level': alarm[3],
-        'message': alarm[4],
-        'timestamp': alarm[5],
-        'acknowledged': alarm[6]
-    } for alarm in alarms])
+        want = acknowledged.lower() == 'true'
+        filtered = [a for a in filtered if a.get('acknowledged', False) == want]
+
+    # alarms are stored newest-first
+    return jsonify(filtered[:limit])
 
 @app.route('/api/alarms/<int:alarm_id>/acknowledge', methods=['POST'])
 def acknowledge_alarm(alarm_id):
     """Acknowledge an alarm"""
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    cursor.execute('UPDATE alarms SET acknowledged = TRUE WHERE id = ?', (alarm_id,))
-    conn.commit()
-    conn.close()
-    
-    return jsonify({'status': 'success', 'message': 'Alarm acknowledged'})
+    with data_lock:
+        for a in alarms:
+            if a['id'] == alarm_id:
+                a['acknowledged'] = True
+                return jsonify({'status': 'success', 'message': 'Alarm acknowledged'})
+
+    return jsonify({'status': 'error', 'message': 'Alarm not found'}), 404
 
 @app.route('/api/dashboard/stats', methods=['GET'])
 def get_dashboard_stats():
     """Get dashboard statistics"""
-    conn = sqlite3.connect(DATABASE)
-    cursor = conn.cursor()
-    
-    # Count active sensors
-    cursor.execute('SELECT COUNT(*) FROM sensors WHERE status = "active"')
-    active_sensors = cursor.fetchone()[0]
-    
-    # Count unacknowledged alarms
-    cursor.execute('SELECT COUNT(*) FROM alarms WHERE acknowledged = FALSE')
-    unack_alarms = cursor.fetchone()[0]
-    
-    # Count total data points today
-    cursor.execute('''
-        SELECT COUNT(*) FROM sensor_data 
-        WHERE DATE(timestamp) = DATE('now')
-    ''')
-    today_readings = cursor.fetchone()[0]
-    
-    conn.close()
-    
+    now = datetime.now()
+    today = now.date()
+    with data_lock:
+        active_sensors = sum(1 for s in sensors.values() if s.get('status', 'active') == 'active')
+        unack_alarms = sum(1 for a in alarms if not a.get('acknowledged', False))
+        today_readings = 0
+        for entries in sensor_data.values():
+            for e in list(entries):
+                try:
+                    ts = datetime.fromisoformat(e['timestamp'])
+                    if ts.date() == today:
+                        today_readings += 1
+                except Exception:
+                    # ignore parse errors
+                    pass
+
     return jsonify({
         'active_sensors': active_sensors,
         'unacknowledged_alarms': unack_alarms,
@@ -298,16 +254,16 @@ def handle_disconnect():
     print('Client disconnected')
 
 if __name__ == '__main__':
-    # Initialize database
-    print("Initializing database...")
-    init_db()
-    
+    # Initialize in-memory stores
+    print("Initializing in-memory data stores...")
+    init_data()
+
     # Start MQTT client in a separate thread
     print("Starting MQTT client thread...")
     mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
     mqtt_thread.start()
     print("MQTT thread started")
-    
+
     # Start Flask-SocketIO server (disable debug to avoid reloader issues)
     print("Starting Flask-SocketIO server...")
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)

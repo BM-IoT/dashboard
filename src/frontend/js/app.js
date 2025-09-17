@@ -46,6 +46,21 @@ class IoTDashboard {
                 const { status, message } = e.detail || {};
                 if (status === 'connected') {
                     this.showSuccess(message || 'Connected');
+                    // Refresh sensors/devices when connection is established
+                    try {
+                        if (window.dashboard && typeof window.dashboard.refreshSensors === 'function') {
+                            window.dashboard.refreshSensors();
+                        }
+                        if (window.devicesController && typeof window.devicesController.loadDevices === 'function') {
+                            // reload devices to refresh table
+                            window.devicesController.loadDevices().then(() => window.devicesController.applyFilters());
+                        }
+                        if (window.sensorHistoryController && typeof window.sensorHistoryController.loadDevices === 'function') {
+                            window.sensorHistoryController.loadDevices();
+                        }
+                    } catch (err) {
+                        console.warn('Error refreshing devices after connect:', err);
+                    }
                 } else if (status === 'disconnected' || status === 'error') {
                     this.showError(message || 'Disconnected');
                 }

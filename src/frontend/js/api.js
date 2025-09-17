@@ -37,6 +37,12 @@ class API {
             this.updateConnectionStatus('connected', 'Connected');
             // Emit a global event for other parts of the app
             window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'connected', message: 'Connected' } }));
+            // Fetch current sensors list on connect so UI can show newly appeared sensors
+            this.getSensors().then(list => {
+                window.dispatchEvent(new CustomEvent('sensorsList', { detail: list }));
+            }).catch(err => {
+                console.warn('Failed to fetch sensors after connect:', err);
+            });
         });
 
         this.socket.on('disconnect', (reason) => {
@@ -56,6 +62,12 @@ class API {
         // Forward domain events
         this.socket.on('sensor_update', (data) => this.onSensorUpdate(data));
         this.socket.on('alarm_update', (data) => this.onAlarmUpdate(data));
+        // New sensor connected (server-side notification)
+        this.socket.on('sensor_connected', (data) => {
+            console.log('sensor_connected event received:', data);
+            // Emit a higher-level event for controllers to handle
+            window.dispatchEvent(new CustomEvent('sensorConnected', { detail: data }));
+        });
 
         return this.socket;
     }

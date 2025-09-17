@@ -42,6 +42,51 @@ class DashboardController {
         }
     }
 
+    /**
+     * Add a new sensor to devices list or update existing one.
+     * Ensures UI reflects sensors that appear after startup.
+     */
+    addOrUpdateSensor(sensorMeta) {
+        if (!sensorMeta || !sensorMeta.sensor_id) return;
+
+        let device = this.devices.find(d => d.id === sensorMeta.sensor_id);
+        if (!device) {
+            device = {
+                id: sensorMeta.sensor_id,
+                name: sensorMeta.sensor_id,
+                location: sensorMeta.location || 'unknown',
+                type: 'sensor',
+                subtype: sensorMeta.sensor_type || 'unknown',
+                status: sensorMeta.status || 'online',
+                lastValue: null,
+                lastSeen: new Date(),
+                lastUpdate: null
+            };
+            this.devices.push(device);
+        } else {
+            // update metadata if changed
+            device.location = sensorMeta.location || device.location;
+            device.subtype = sensorMeta.sensor_type || device.subtype;
+            device.status = sensorMeta.status || device.status;
+        }
+
+        // Refresh UI
+        this.updateSystemHealth();
+        this.updateDeviceCards();
+    }
+
+    /**
+     * Refresh sensors list from backend and merge into current devices
+     */
+    async refreshSensors() {
+        try {
+            const sensors = await window.api.getSensors();
+            sensors.forEach(s => this.addOrUpdateSensor(s));
+        } catch (err) {
+            console.warn('Failed to refresh sensors list:', err);
+        }
+    }
+
     async loadDeviceValues() {
         for (const device of this.devices) {
             try {
@@ -164,8 +209,20 @@ class DashboardController {
     }
 
     handleSensorUpdate(data) {
+        // Ensure sensor exists in devices list
+        let device = this.devices.find(d => d.id === data.sensor_id);
+        if (!device) {
+            // add minimal metadata and then populate
+            this.addOrUpdateSensor({
+                sensor_id: data.sensor_id,
+                sensor_type: data.data.type || 'unknown',
+                location: data.data.location || 'unknown',
+                status: 'online'
+            });
+            device = this.devices.find(d => d.id === data.sensor_id);
+        }
+
         // Update device data
-        const device = this.devices.find(d => d.id === data.sensor_id);
         if (device) {
             device.lastValue = data.data.value;
             device.lastUpdate = new Date(data.timestamp);
@@ -210,6 +267,17 @@ class DashboardController {
         // Real-time updates
         window.addEventListener('sensorUpdate', (event) => {
             this.handleSensorUpdate(event.detail);
+        });
+
+        // Sensors list snapshot (on connect)
+        window.addEventListener('sensorsList', (event) => {
+            const list = event.detail || [];
+            list.forEach(s => this.addOrUpdateSensor(s));
+        });
+        // Single sensor connected event
+        window.addEventListener('sensorConnected', (event) => {
+            const sensor = event.detail;
+            if (sensor) this.addOrUpdateSensor(sensor);
         });
 
         window.addEventListener('alarmUpdate', (event) => {

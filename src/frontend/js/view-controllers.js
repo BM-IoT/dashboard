@@ -75,6 +75,43 @@ class DevicesController {
         window.addEventListener('sensorUpdate', (event) => {
             this.handleDeviceUpdate(event.detail);
         });
+        // Sensors list snapshot (on connect)
+        window.addEventListener('sensorsList', (event) => {
+            const list = event.detail || [];
+            list.forEach(s => this.addOrUpdateDevice(s));
+            this.applyFilters();
+        });
+        // Single sensor connected event
+        window.addEventListener('sensorConnected', (event) => {
+            const sensor = event.detail;
+            if (sensor) {
+                this.addOrUpdateDevice(sensor);
+                this.applyFilters();
+            }
+        });
+    }
+
+    addOrUpdateDevice(sensorMeta) {
+        if (!sensorMeta || !sensorMeta.sensor_id) return;
+
+        let device = this.devices.find(d => d.id === sensorMeta.sensor_id);
+        if (!device) {
+            device = {
+                id: sensorMeta.sensor_id,
+                name: sensorMeta.sensor_id,
+                location: sensorMeta.location || 'unknown',
+                type: 'sensor',
+                subtype: sensorMeta.sensor_type || 'unknown',
+                status: sensorMeta.status || 'online',
+                lastSeen: new Date(),
+                lastValue: null
+            };
+            this.devices.push(device);
+        } else {
+            device.location = sensorMeta.location || device.location;
+            device.subtype = sensorMeta.sensor_type || device.subtype;
+            device.status = sensorMeta.status || device.status;
+        }
     }
 
     applyFilters() {
@@ -137,12 +174,23 @@ class DevicesController {
     }
 
     handleDeviceUpdate(data) {
-        const device = this.devices.find(d => d.id === data.sensor_id);
+        let device = this.devices.find(d => d.id === data.sensor_id);
+        if (!device) {
+            // add missing device
+            this.addOrUpdateDevice({
+                sensor_id: data.sensor_id,
+                sensor_type: data.data?.type || 'unknown',
+                location: data.data?.location || 'unknown',
+                status: 'online'
+            });
+            device = this.devices.find(d => d.id === data.sensor_id);
+        }
+
         if (device) {
-            device.lastValue = data.data.value;
+            device.lastValue = data.data.value || data.value || null;
             device.lastSeen = new Date(data.timestamp);
             device.status = 'online';
-            
+
             // Re-apply filters and re-render
             this.applyFilters();
         }
@@ -637,34 +685,52 @@ class AlarmHistoryController {
     }
 
     handleAlarmUpdate(data) {
+        // Normalize alarm payload (server may send { alarm: { ... } } or top-level fields)
+        const incoming = data || {};
+        const alarmPayload = incoming.alarm || incoming;
+
+        const timestamp = alarmPayload.timestamp || incoming.timestamp || new Date().toISOString();
+        const sensor_id = alarmPayload.sensor_id || incoming.sensor_id || alarmPayload.sensor || null;
+        const level = alarmPayload.level || incoming.level || 'warning';
+        const message = alarmPayload.message || incoming.message || alarmPayload.msg || 'Alarm triggered';
+        const id = alarmPayload.id || incoming.id || null;
+        const acknowledged = alarmPayload.acknowledged || false;
+
+        const normalized = {
+            id,
+            timestamp,
+            sensor_id,
+            level,
+            message,
+            acknowledged
+        };
+
         // Add new alarm to the beginning of the array
-        this.alarms.unshift({
-            timestamp: data.timestamp,
-            sensor_id: data.sensor_id,
-            level: data.level || data.alarm?.level || 'warning',
-            message: data.message || data.alarm?.message || 'Alarm triggered',
-            acknowledged: false
-        });
+        this.alarms.unshift(normalized);
 
         // Keep only recent alarms (e.g., last 1000)
         if (this.alarms.length > 1000) {
             this.alarms = this.alarms.slice(0, 1000);
         }
 
-        // Throttle UI updates to prevent excessive redraws
-        const now = Date.now();
-        if (now - this.lastUpdate < this.updateThrottle) {
-            return; // Skip UI update due to throttling
-        }
-        this.lastUpdate = now;
+        // Always refresh table so new alarms are visible immediately
+        this.renderAlarmTable();
+        this.populateDeviceFilter(); // Update device filter with new devices
 
-        // Update components if currently in alarm history view
-        const alarmHistoryView = document.getElementById('alarm-historyView');
-        if (alarmHistoryView?.style.display !== 'none') {
+        // Throttle heavier updates (charts/stats) to prevent excessive redraws
+        const now = Date.now();
+        if (now - this.lastUpdate >= this.updateThrottle) {
+            this.lastUpdate = now;
             this.updateAlarmStats();
             this.updateTimelineChart();
-            this.renderAlarmTable();
-            this.populateDeviceFilter(); // Update device filter with new devices
+        } else {
+            // Schedule an update after the throttle delay to ensure charts/stats catch up
+            clearTimeout(this._scheduledAlarmUpdate);
+            this._scheduledAlarmUpdate = setTimeout(() => {
+                this.lastUpdate = Date.now();
+                this.updateAlarmStats();
+                this.updateTimelineChart();
+            }, this.updateThrottle - (now - this.lastUpdate));
         }
     }
 }
