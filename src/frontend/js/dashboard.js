@@ -1,188 +1,143 @@
-// Dashboard Controller - Live System State
+// Simplified Dashboard Controller - Live System State
 class DashboardController {
     constructor() {
-        this.devices = [];
         this.mqttTopics = new Map();
-        this.systemStartTime = Date.now();
-        this.lastUpdateTime = null;
+        this.updateInterval = null;
     }
 
     async init() {
-        await this.loadSystemData();
-        this.setupEventListeners();
-        this.startPeriodicUpdates();
+        this._setupEventListeners();
+        this._startPeriodicUpdates();
+        this._loadInitialData();
     }
 
-    async loadSystemData() {
-        try {
-            // Load sensors as devices
-            const sensors = await window.api.getSensors();
-            this.devices = sensors.map(sensor => ({
-                id: sensor.sensor_id,
-                name: sensor.sensor_id,
-                location: sensor.location,
-                type: 'sensor',
-                subtype: sensor.sensor_type,
-                status: 'online',
-                lastValue: null,
-                lastSeen: new Date(),
-                lastUpdate: null
-            }));
-
-            // Load latest values for each device
-            await this.loadDeviceValues();
-            
-            // Update UI
-            this.updateSystemHealth();
-            this.updateDeviceCards();
-            this.updateMqttTopics();
-
-        } catch (error) {
-            console.error('Failed to load system data:', error);
-        }
-    }
-
-    /**
-     * Add a new sensor to devices list or update existing one.
-     * Ensures UI reflects sensors that appear after startup.
-     */
-    addOrUpdateSensor(sensorMeta) {
-        if (!sensorMeta || !sensorMeta.sensor_id) return;
-
-        let device = this.devices.find(d => d.id === sensorMeta.sensor_id);
-        if (!device) {
-            device = {
-                id: sensorMeta.sensor_id,
-                name: sensorMeta.sensor_id,
-                location: sensorMeta.location || 'unknown',
-                type: 'sensor',
-                subtype: sensorMeta.sensor_type || 'unknown',
-                status: sensorMeta.status || 'online',
-                lastValue: null,
-                lastSeen: new Date(),
-                lastUpdate: null
-            };
-            this.devices.push(device);
-        } else {
-            // update metadata if changed
-            device.location = sensorMeta.location || device.location;
-            device.subtype = sensorMeta.sensor_type || device.subtype;
-            device.status = sensorMeta.status || device.status;
+    _setupEventListeners() {
+        // Subscribe to store updates
+        window.store.subscribe('sensors', (sensors) => this._updateDeviceCards(sensors));
+        window.store.subscribe('systemStats', (stats) => this._updateSystemMetrics(stats));
+        window.store.subscribe('connectionStatus', (status) => this._updateSystemHealth(status));
+        window.store.subscribe('sensorData', ({ sensor }) => this._updateDeviceCard(sensor));
+        
+        // Subscribe to API events for MQTT table updates
+        window.api.on('sensorUpdate', (data) => this._handleSensorUpdate(data));
+        window.api.on('alarmUpdate', (data) => this._handleAlarmUpdate(data));
+        
+        // MQTT refresh button
+        const refreshBtn = document.getElementById('refreshMqttBtn');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => this._updateMqttTopics());
         }
 
-        // Refresh UI
-        this.updateSystemHealth();
-        this.updateDeviceCards();
-    }
-
-    /**
-     * Refresh sensors list from backend and merge into current devices
-     */
-    async refreshSensors() {
-        try {
-            const sensors = await window.api.getSensors();
-            sensors.forEach(s => this.addOrUpdateSensor(s));
-        } catch (err) {
-            console.warn('Failed to refresh sensors list:', err);
-        }
-    }
-
-    async loadDeviceValues() {
-        for (const device of this.devices) {
-            try {
-                const data = await window.api.getSensorData(device.id, 1);
-                if (data && data.length > 0) {
-                    device.lastValue = data[0].value;
-                    device.lastUpdate = new Date(data[0].timestamp);
-                    device.lastSeen = new Date(data[0].timestamp);
-                    device.status = this.calculateDeviceStatus(device);
-                }
-            } catch (error) {
-                console.error(`Failed to load data for device ${device.id}:`, error);
-                device.status = 'offline';
+        // Device card click handlers
+        document.addEventListener('click', (e) => {
+            const deviceCard = e.target.closest('.device-card');
+            if (deviceCard) {
+                const deviceId = deviceCard.dataset.deviceId;
+                this._showDeviceDetails(deviceId);
             }
+        });
+    }
+
+    async _loadInitialData() {
+        try {
+            this._updateDeviceCards(window.store.getSensors());
+            this._updateSystemMetrics(window.store.getSystemStats());
+        } catch (error) {
+            console.error('Failed to load dashboard data:', error);
         }
     }
 
-    calculateDeviceStatus(device) {
-        if (!device.lastValue || !device.lastUpdate) return 'offline';
-        
-        const timeSinceUpdate = Date.now() - device.lastUpdate.getTime();
-        if (timeSinceUpdate > 300000) return 'offline'; // 5 minutes
-        
-        const status = window.api.getSensorStatus(device.lastValue, device.subtype);
-        return status;
+    _startPeriodicUpdates() {
+        this.updateInterval = setInterval(() => {
+            this._updateMqttTopics();
+        }, 5000);
     }
 
-    updateSystemHealth() {
-        const activeDevices = this.devices.filter(d => d.status !== 'offline').length;
-        const criticalDevices = this.devices.filter(d => d.status === 'critical').length;
-        const warningDevices = this.devices.filter(d => d.status === 'warning').length;
+    _updateSystemHealth(connectionStatus) {
+        const sensors = window.store.getSensors();
+        const activeSensors = sensors.filter(s => s.status !== 'offline').length;
+        const criticalSensors = sensors.filter(s => s.status === 'critical').length;
         
-        // Determine overall system health
-        let systemHealth = 'normal';
         let healthStatus = 'NORMAL';
+        let healthClass = 'normal';
         
-        if (criticalDevices > 0) {
-            systemHealth = 'critical';
+        if (connectionStatus !== 'connected') {
+            healthStatus = 'DISCONNECTED';
+            healthClass = 'error';
+        } else if (criticalSensors > 0) {
             healthStatus = 'CRITICAL';
-        } else if (warningDevices > 0) {
-            systemHealth = 'warning';
+            healthClass = 'critical';
+        } else if (sensors.some(s => s.status === 'warning')) {
             healthStatus = 'WARNING';
+            healthClass = 'warning';
         }
 
-        // Update health indicator
-        const healthStatusEl = document.getElementById('healthStatus');
-        const healthDotEl = document.getElementById('healthDot');
+        this._updateElement('healthStatus', healthStatus);
+        this._updateElement('activeDevices', activeSensors);
+        this._updateElement('criticalAlarms', criticalSensors);
         
-        if (healthStatusEl) {
-            healthStatusEl.textContent = healthStatus;
-            healthStatusEl.style.color = this.getStatusColor(systemHealth);
+        const healthDot = document.getElementById('healthDot');
+        if (healthDot) {
+            healthDot.className = `health-dot ${healthClass}`;
         }
-        
-        if (healthDotEl) {
-            healthDotEl.className = `health-dot ${systemHealth}`;
-        }
-
-        // Update metrics
-        this.updateElement('activeDevices', activeDevices);
-        this.updateElement('criticalAlarms', criticalDevices);
-        this.updateElement('systemUptime', this.formatUptime(Date.now() - this.systemStartTime));
-        this.updateElement('lastUpdate', new Date().toLocaleTimeString());
     }
 
-    updateDeviceCards() {
+    _updateSystemMetrics(stats) {
+        if (stats.active_sensors !== undefined) {
+            this._updateElement('activeDevices', stats.active_sensors);
+        }
+        if (stats.unacknowledged_alarms !== undefined) {
+            this._updateElement('criticalAlarms', stats.unacknowledged_alarms);
+        }
+    }
+
+    _updateDeviceCards(sensors) {
         const container = document.getElementById('deviceCards');
         if (!container) return;
 
-        container.innerHTML = this.devices.map(device => {
-            const timeDelta = device.lastUpdate ? 
-                this.formatTimeDelta(Date.now() - device.lastUpdate.getTime()) : 'Never';
-            
-            return `
-                <div class="device-card ${device.status}" data-device-id="${device.id}">
-                    <div class="device-card-header">
-                        <div class="device-id">${device.id}</div>
-                        <div class="device-status-dot ${device.status}"></div>
-                    </div>
-                    <div class="device-value">
-                        ${device.lastValue !== null ? 
-                            window.api.formatSensorValue(device.lastValue, device.subtype) : 
-                            'No Data'}
-                    </div>
-                    <div class="device-meta">
-                        <div class="device-location">${device.location}</div>
-                        <div class="device-delta">${timeDelta}</div>
-                    </div>
-                    <div class="device-info">
-                        <small>${device.subtype} • ${device.status}</small>
-                    </div>
-                </div>
-            `;
-        }).join('');
+        if (sensors.length === 0) {
+            container.innerHTML = '<div class="no-devices">No devices connected</div>';
+            return;
+        }
+
+        container.innerHTML = sensors.map(sensor => this._createDeviceCard(sensor)).join('');
+        this._updateElement('lastUpdate', new Date().toLocaleTimeString());
     }
 
-    updateMqttTopics() {
+    _updateDeviceCard(sensor) {
+        const card = document.querySelector(`[data-device-id="${sensor.id}"]`);
+        if (card) {
+            card.outerHTML = this._createDeviceCard(sensor);
+        }
+    }
+
+    _createDeviceCard(sensor) {
+        const timeDelta = sensor.lastUpdate ? 
+            this._formatTimeDelta(Date.now() - sensor.lastUpdate.getTime()) : 'Never';
+        
+        return `
+            <div class="device-card ${sensor.status}" data-device-id="${sensor.id}">
+                <div class="device-card-header">
+                    <div class="device-id">${sensor.id}</div>
+                    <div class="device-status-dot ${sensor.status}"></div>
+                </div>
+                <div class="device-value">
+                    ${(sensor.lastValue !== null && sensor.lastValue !== undefined) ? 
+                        window.api.formatSensorValue(sensor.lastValue, sensor.type) : 
+                        'No Data'}
+                </div>
+                <div class="device-meta">
+                    <div class="device-location">${sensor.location}</div>
+                    <div class="device-delta">${timeDelta}</div>
+                </div>
+                <div class="device-info">
+                    <small>${sensor.type} • ${sensor.status}</small>
+                </div>
+            </div>
+        `;
+    }
+
+    _updateMqttTopics() {
         const tableBody = document.getElementById('mqttTopicsBody');
         if (!tableBody) return;
 
@@ -192,8 +147,8 @@ class DashboardController {
         }
 
         tableBody.innerHTML = Array.from(this.mqttTopics.entries()).map(([topic, data]) => {
-            const timeDelta = this.formatTimeDelta(Date.now() - data.timestamp.getTime());
-            const deltaClass = this.getTimeDeltaClass(Date.now() - data.timestamp.getTime());
+            const timeDelta = this._formatTimeDelta(Date.now() - data.timestamp.getTime());
+            const deltaClass = this._getTimeDeltaClass(Date.now() - data.timestamp.getTime());
             const fullMessage = JSON.stringify(data.payload, null, 2);
             const truncatedMessage = JSON.stringify(data.payload).substring(0, 50);
             
@@ -208,149 +163,21 @@ class DashboardController {
         }).join('');
     }
 
-    handleSensorUpdate(data) {
-        // Ensure sensor exists in devices list
-        let device = this.devices.find(d => d.id === data.sensor_id);
-        if (!device) {
-            // add minimal metadata and then populate
-            this.addOrUpdateSensor({
-                sensor_id: data.sensor_id,
-                sensor_type: data.data.type || 'unknown',
-                location: data.data.location || 'unknown',
-                status: 'online'
-            });
-            device = this.devices.find(d => d.id === data.sensor_id);
-        }
+    _showDeviceDetails(deviceId) {
+        const sensor = window.store.getSensor(deviceId);
+        if (!sensor) return;
 
-        // Update device data
-        if (device) {
-            device.lastValue = data.data.value;
-            device.lastUpdate = new Date(data.timestamp);
-            device.lastSeen = new Date(data.timestamp);
-            device.status = this.calculateDeviceStatus(device);
-        }
-
-        // Update MQTT topics
-        const topic = `sensors/${data.sensor_id}/data`;
-        this.mqttTopics.set(topic, {
-            payload: data.data,
-            timestamp: new Date(data.timestamp)
-        });
-
-        // Update UI
-        this.updateSystemHealth();
-        this.updateDeviceCards();
-        this.updateMqttTopics();
+        alert(`Device Details:\n\nID: ${sensor.id}\nType: ${sensor.type}\nLocation: ${sensor.location}\nStatus: ${sensor.status}\nLast Value: ${(sensor.lastValue !== null && sensor.lastValue !== undefined) ? window.api.formatSensorValue(sensor.lastValue, sensor.type) : 'No Data'}\nLast Update: ${sensor.lastUpdate ? sensor.lastUpdate.toLocaleString() : 'Never'}`);
     }
 
-    handleAlarmUpdate(data) {
-        // Update MQTT topics
-        const topic = `alarms/${data.sensor_id}`;
-        this.mqttTopics.set(topic, {
-            payload: data.alarm,
-            timestamp: new Date(data.timestamp)
-        });
-
-        // Update device status if it's an alarm
-        const device = this.devices.find(d => d.id === data.sensor_id);
-        if (device && data.alarm.level === 'critical') {
-            device.status = 'critical';
-        }
-
-        // Update UI
-        this.updateSystemHealth();
-        this.updateDeviceCards();
-        this.updateMqttTopics();
-    }
-
-    setupEventListeners() {
-        // Real-time updates
-        window.addEventListener('sensorUpdate', (event) => {
-            this.handleSensorUpdate(event.detail);
-        });
-
-        // Sensors list snapshot (on connect)
-        window.addEventListener('sensorsList', (event) => {
-            const list = event.detail || [];
-            list.forEach(s => this.addOrUpdateSensor(s));
-        });
-        // Single sensor connected event
-        window.addEventListener('sensorConnected', (event) => {
-            const sensor = event.detail;
-            if (sensor) this.addOrUpdateSensor(sensor);
-        });
-
-        window.addEventListener('alarmUpdate', (event) => {
-            this.handleAlarmUpdate(event.detail);
-        });
-
-        // MQTT refresh button
-        const refreshBtn = document.getElementById('refreshMqttBtn');
-        if (refreshBtn) {
-            refreshBtn.addEventListener('click', () => {
-                this.updateMqttTopics();
-            });
-        }
-
-        // Device card click handlers
-        document.addEventListener('click', (e) => {
-            const deviceCard = e.target.closest('.device-card');
-            if (deviceCard) {
-                const deviceId = deviceCard.dataset.deviceId;
-                this.showDeviceDetails(deviceId);
-            }
-        });
-    }
-
-    startPeriodicUpdates() {
-        // Update every 30 seconds
-        setInterval(() => {
-            this.updateSystemHealth();
-            
-            // Check for stale devices
-            this.devices.forEach(device => {
-                if (device.lastUpdate) {
-                    const timeSinceUpdate = Date.now() - device.lastUpdate.getTime();
-                    if (timeSinceUpdate > 300000 && device.status !== 'offline') { // 5 minutes
-                        device.status = 'offline';
-                    }
-                }
-            });
-            
-            this.updateDeviceCards();
-        }, 10000);
-    }
-
-    showDeviceDetails(deviceId) {
-        const device = this.devices.find(d => d.id === deviceId);
-        if (!device) return;
-
-        // For now, show an alert with device details
-        // In a full implementation, this could open a modal or navigate to a detail view
-        alert(`Device Details:\n\nID: ${device.id}\nType: ${device.subtype}\nLocation: ${device.location}\nStatus: ${device.status}\nLast Value: ${device.lastValue !== null ? window.api.formatSensorValue(device.lastValue, device.subtype) : 'No Data'}\nLast Seen: ${device.lastSeen ? device.lastSeen.toLocaleString() : 'Never'}`);
-    }
-
-    // Utility methods
-    updateElement(id, value) {
+    _updateElement(id, value) {
         const element = document.getElementById(id);
         if (element) {
             element.textContent = value;
         }
     }
 
-    formatUptime(milliseconds) {
-        const seconds = Math.floor(milliseconds / 1000);
-        const minutes = Math.floor(seconds / 60);
-        const hours = Math.floor(minutes / 60);
-        const days = Math.floor(hours / 24);
-
-        if (days > 0) return `${days}d ${hours % 24}h`;
-        if (hours > 0) return `${hours}h ${minutes % 60}m`;
-        if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-        return `${seconds}s`;
-    }
-
-    formatTimeDelta(milliseconds) {
+    _formatTimeDelta(milliseconds) {
         const seconds = Math.floor(milliseconds / 1000);
         const minutes = Math.floor(seconds / 60);
         const hours = Math.floor(minutes / 60);
@@ -360,22 +187,30 @@ class DashboardController {
         return `${seconds}s ago`;
     }
 
-    getTimeDeltaClass(milliseconds) {
+    _getTimeDeltaClass(milliseconds) {
         const minutes = milliseconds / (1000 * 60);
         if (minutes > 10) return 'offline';
         if (minutes > 5) return 'stale';
         return '';
     }
 
-    getStatusColor(status) {
-        switch (status) {
-            case 'critical': return '#ff4757';
-            case 'warning': return '#ffa502';
-            case 'normal': return '#2ed573';
-            default: return '#666';
-        }
+    _handleSensorUpdate(data) {
+        // Update MQTT topics table
+        const topic = `sensors/${data.sensor_id}/data`;
+        this.mqttTopics.set(topic, {
+            payload: data.data || data,
+            timestamp: new Date(data.timestamp)
+        });
+        this._updateMqttTopics();
+    }
+
+    _handleAlarmUpdate(data) {
+        // Update MQTT topics table
+        const topic = `alarms/${data.sensor_id}`;
+        this.mqttTopics.set(topic, {
+            payload: data.alarm || data,
+            timestamp: new Date(data.timestamp)
+        });
+        this._updateMqttTopics();
     }
 }
-
-// Create global dashboard instance
-window.dashboard = new DashboardController();

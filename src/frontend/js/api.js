@@ -1,9 +1,10 @@
-// API configuration and utilities
+// Simplified API client with unified interface
 class API {
     constructor() {
         this.baseURL = 'http://localhost:5000/api';
         this.socket = null;
         this.isConnected = false;
+        this.eventListeners = new Map();
     }
 
     async init() {
@@ -16,172 +17,121 @@ class API {
                 console.warn('Could not get backend URL from Electron:', error);
             }
         }
-
-        // Prepare socket (but don't auto-connect) — use connect() to start
-        this.socket = null;
-        this.isConnected = false;
     }
 
-    // Create the socket instance but don't connect automatically
-    createSocket() {
-        if (this.socket) return this.socket;
+    // Simplified socket connection with automatic event handling
+    async connect() {
+        if (this.socket?.connected) return;
 
         const socketURL = this.baseURL.replace('/api', '');
-        // Create socket with autoConnect false so we can control connection lifecycle
         this.socket = io(socketURL, { autoConnect: false });
 
-        // Wire socket events
-        this.socket.on('connect', () => {
-            console.log('Connected to backend (API)');
-            this.isConnected = true;
-            this.updateConnectionStatus('connected', 'Connected');
-            // Emit a global event for other parts of the app
-            window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'connected', message: 'Connected' } }));
-            // Fetch current sensors list on connect so UI can show newly appeared sensors
-            this.getSensors().then(list => {
-                window.dispatchEvent(new CustomEvent('sensorsList', { detail: list }));
-            }).catch(err => {
-                console.warn('Failed to fetch sensors after connect:', err);
-            });
-        });
-
-        this.socket.on('disconnect', (reason) => {
-            console.log('Disconnected from backend (API)', reason);
-            this.isConnected = false;
-            this.updateConnectionStatus('disconnected', 'Disconnected');
-            window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'disconnected', message: 'Disconnected' } }));
-        });
-
-        this.socket.on('connect_error', (error) => {
-            console.error('Connection error (API):', error);
-            this.isConnected = false;
-            this.updateConnectionStatus('error', 'Connection Error');
-            window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'error', message: 'Connection Error', error } }));
-        });
-
-        // Forward domain events
-        this.socket.on('sensor_update', (data) => this.onSensorUpdate(data));
-        this.socket.on('alarm_update', (data) => this.onAlarmUpdate(data));
-        // New sensor connected (server-side notification)
-        this.socket.on('sensor_connected', (data) => {
-            console.log('sensor_connected event received:', data);
-            // Emit a higher-level event for controllers to handle
-            window.dispatchEvent(new CustomEvent('sensorConnected', { detail: data }));
-        });
-
-        return this.socket;
-    }
-
-    // Connect to the backend socket; returns a Promise that resolves on successful connect
-    connect() {
         return new Promise((resolve, reject) => {
-            try {
-                const socket = this.createSocket();
-                // Handle immediate connect state
-                if (socket.connected) {
-                    this.isConnected = true;
-                    this.updateConnectionStatus('connected', 'Connected');
-                    resolve();
-                    return;
-                }
+            this.socket.once('connect', () => {
+                console.log('Connected to backend');
+                this.isConnected = true;
+                this._updateConnectionStatus('connected', 'Connected');
+                this._setupEventHandlers();
+                resolve();
+            });
 
-                socket.once('connect', () => resolve());
-                socket.once('connect_error', (err) => reject(err));
+            this.socket.once('connect_error', (error) => {
+                console.error('Connection error:', error);
+                this.isConnected = false;
+                this._updateConnectionStatus('error', 'Connection Error');
+                reject(error);
+            });
 
-                socket.connect();
-                this.updateConnectionStatus('connecting', 'Connecting...');
-                window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'connecting', message: 'Connecting...' } }));
-            } catch (err) {
-                reject(err);
-            }
+            this.socket.connect();
+            this._updateConnectionStatus('connecting', 'Connecting...');
         });
     }
 
-    // Graceful disconnect
     disconnect() {
         if (this.socket) {
             this.socket.disconnect();
             this.socket = null;
             this.isConnected = false;
-            this.updateConnectionStatus('disconnected', 'Disconnected');
-            window.dispatchEvent(new CustomEvent('connectionStatus', { detail: { status: 'disconnected', message: 'Disconnected' } }));
+            this._updateConnectionStatus('disconnected', 'Disconnected');
         }
     }
 
-    initSocket() {
-        const socketURL = this.baseURL.replace('/api', '');
-        this.socket = io(socketURL);
+    // Event handling with simplified interface
+    on(event, callback) {
+        if (!this.eventListeners.has(event)) {
+            this.eventListeners.set(event, new Set());
+        }
+        this.eventListeners.get(event).add(callback);
+    }
 
-        this.socket.on('connect', () => {
-            console.log('Connected to backend');
-            this.isConnected = true;
-            this.updateConnectionStatus('connected', 'Connected');
-        });
+    off(event, callback) {
+        if (this.eventListeners.has(event)) {
+            this.eventListeners.get(event).delete(callback);
+        }
+    }
 
-        this.socket.on('disconnect', () => {
-            console.log('Disconnected from backend');
+    _emit(event, data) {
+        if (this.eventListeners.has(event)) {
+            this.eventListeners.get(event).forEach(callback => {
+                try {
+                    callback(data);
+                } catch (error) {
+                    console.error(`Error in event handler for ${event}:`, error);
+                }
+            });
+        }
+    }
+
+    _setupEventHandlers() {
+        this.socket.on('disconnect', (reason) => {
+            console.log('Disconnected from backend:', reason);
             this.isConnected = false;
-            this.updateConnectionStatus('disconnected', 'Disconnected');
+            this._updateConnectionStatus('disconnected', 'Disconnected');
         });
 
-        this.socket.on('connect_error', () => {
-            console.log('Connection error');
-            this.isConnected = false;
-            this.updateConnectionStatus('error', 'Connection Error');
-        });
-
-        // Listen for real-time updates
         this.socket.on('sensor_update', (data) => {
-            this.onSensorUpdate(data);
+            this._emit('sensorUpdate', data);
         });
 
         this.socket.on('alarm_update', (data) => {
-            this.onAlarmUpdate(data);
+            this._emit('alarmUpdate', data);
         });
+
+        this.socket.on('sensor_connected', (data) => {
+            this._emit('sensorConnected', data);
+        });
+
+        // Load initial sensor list
+        this.getSensors().then(sensors => {
+            this._emit('sensorsLoaded', sensors);
+        }).catch(console.error);
     }
 
-    updateConnectionStatus(status, message) {
+    _updateConnectionStatus(status, message) {
         const statusElement = document.getElementById('statusText');
         const indicatorElement = document.getElementById('statusIndicator');
         
         if (statusElement) statusElement.textContent = message;
         if (indicatorElement) {
-            indicatorElement.className = 'status-indicator';
-            if (status === 'connected') {
-                indicatorElement.classList.add('connected');
-            } else if (status === 'connecting') {
-                indicatorElement.classList.add('connecting');
-            }
+            indicatorElement.className = `status-indicator ${status}`;
         }
+
+        this._emit('connectionStatus', { status, message });
     }
 
-    onSensorUpdate(data) {
-        // Emit custom event for sensor updates
-        window.dispatchEvent(new CustomEvent('sensorUpdate', { detail: data }));
-    }
-
-    onAlarmUpdate(data) {
-        // Emit custom event for alarm updates
-        window.dispatchEvent(new CustomEvent('alarmUpdate', { detail: data }));
-    }
-
+    // Simplified HTTP request method
     async request(endpoint, options = {}) {
         const url = `${this.baseURL}${endpoint}`;
         const config = {
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            },
+            headers: { 'Content-Type': 'application/json', ...options.headers },
             ...options
         };
 
         try {
             const response = await fetch(url, config);
-            
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-            
             return await response.json();
         } catch (error) {
             console.error(`API request failed: ${endpoint}`, error);
@@ -189,7 +139,7 @@ class API {
         }
     }
 
-    // Sensor endpoints
+    // API endpoints
     async getSensors() {
         return this.request('/sensors');
     }
@@ -198,7 +148,6 @@ class API {
         return this.request(`/sensors/${sensorId}/data?limit=${limit}`);
     }
 
-    // Alarm endpoints
     async getAlarms(limit = 50, acknowledged = null) {
         let url = `/alarms?limit=${limit}`;
         if (acknowledged !== null) {
@@ -208,64 +157,64 @@ class API {
     }
 
     async acknowledgeAlarm(alarmId) {
-        return this.request(`/alarms/${alarmId}/acknowledge`, {
-            method: 'POST'
-        });
+        return this.request(`/alarms/${alarmId}/acknowledge`, { method: 'POST' });
     }
 
-    // Dashboard endpoints
     async getDashboardStats() {
         return this.request('/dashboard/stats');
     }
 
     // Utility methods
     formatTimestamp(timestamp) {
-        const date = new Date(timestamp);
-        return date.toLocaleString();
+        return new Date(timestamp).toLocaleString();
     }
 
     formatSensorValue(value, sensorType) {
-        switch (sensorType) {
-            case 'humidity':
-                return `${value.toFixed(1)}%`;
-            case 'vibration':
-                return `${value.toFixed(2)} Hz`;
-            case 'stress':
-                return `${value.toFixed(1)} MPa`;
-            default:
-                return value.toFixed(2);
+        // Handle null, undefined, or non-numeric values
+        if (value === null || value === undefined || isNaN(value)) {
+            return 'No Data';
         }
+        
+        // Convert to number if it's a string
+        const numValue = typeof value === 'string' ? parseFloat(value) : value;
+        if (isNaN(numValue)) {
+            return 'Invalid Data';
+        }
+        
+        const formatters = {
+            humidity: v => `${v.toFixed(1)}%`,
+            vibration: v => `${v.toFixed(2)} Hz`,
+            stress: v => `${v.toFixed(1)} MPa`,
+            default: v => v.toFixed(2)
+        };
+        return (formatters[sensorType] || formatters.default)(numValue);
     }
 
     getSensorStatus(value, sensorType) {
-        // Define thresholds for different sensor types
+        // Handle null, undefined, or non-numeric values
+        if (value === null || value === undefined || isNaN(value)) {
+            return 'offline';
+        }
+        
+        // Convert to number if it's a string
+        const numValue = typeof value === 'string' ? parseFloat(value) : value;
+        if (isNaN(numValue)) {
+            return 'offline';
+        }
+        
         const thresholds = {
-            humidity: { critical: [0, 20, 80, 100], warning: [20, 30, 70, 80] },
-            vibration: { critical: [50, Infinity], warning: [20, 50] },
-            stress: { critical: [80, Infinity], warning: [60, 80] }
+            humidity: { critical: [[0, 20], [80, 100]], warning: [[20, 30], [70, 80]] },
+            vibration: { critical: [[50, Infinity]], warning: [[20, 50]] },
+            stress: { critical: [[80, Infinity]], warning: [[60, 80]] }
         };
 
         const threshold = thresholds[sensorType];
         if (!threshold) return 'normal';
 
-        // Check critical thresholds
-        for (let i = 0; i < threshold.critical.length; i += 2) {
-            const min = threshold.critical[i];
-            const max = threshold.critical[i + 1];
-            if (value >= min && value <= max) {
-                return 'critical';
-            }
-        }
-
-        // Check warning thresholds
-        for (let i = 0; i < threshold.warning.length; i += 2) {
-            const min = threshold.warning[i];
-            const max = threshold.warning[i + 1];
-            if (value >= min && value <= max) {
-                return 'warning';
-            }
-        }
-
+        const checkRanges = (ranges) => ranges.some(([min, max]) => numValue >= min && numValue <= max);
+        
+        if (checkRanges(threshold.critical)) return 'critical';
+        if (checkRanges(threshold.warning)) return 'warning';
         return 'normal';
     }
 }

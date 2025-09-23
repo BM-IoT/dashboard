@@ -874,6 +874,15 @@ tr:hover {
     flex-wrap: wrap;
 }
 
+.filter-info {
+    color: #666;
+    font-size: 0.9rem;
+    padding: 0.5rem;
+    background: #f8f9fa;
+    border-radius: 4px;
+    border: 1px solid #e5e5e5;
+}
+
 .devices-table {
     overflow-x: auto;
 }
@@ -1190,11 +1199,66 @@ select.form-control {
     max-height: 400px;
 }
 
+/* Custom Date Range Inputs */
+.custom-date-inputs {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: 1rem;
+    padding: 0.25rem;
+    background: rgba(0, 123, 255, 0.05);
+    border-radius: 6px;
+    border: 1px solid rgba(0, 123, 255, 0.2);
+}
+
+.custom-date-inputs label {
+    font-size: 0.85rem;
+    color: #666;
+    margin: 0;
+    font-weight: 500;
+}
+
+.custom-date-inputs input[type="date"] {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    min-width: 140px;
+    background: white;
+    transition: all 0.2s ease;
+}
+
+.custom-date-inputs input[type="date"]:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.15);
+    transform: translateY(-1px);
+}
+
+.custom-date-inputs input[type="date"]:hover {
+    border-color: #007bff;
+}
+
+/* Hide custom date inputs when not needed */
+.custom-date-inputs.hidden {
+    display: none;
+}
+
 /* Additional responsive improvements for new views */
 @media (max-width: 768px) {
     .history-controls {
         flex-direction: column;
         align-items: stretch;
+    }
+    
+    .custom-date-inputs {
+        margin-left: 0;
+        margin-top: 0.5rem;
+        justify-content: center;
+    }
+    
+    .custom-date-inputs input[type="date"] {
+        min-width: 120px;
     }
     
     .devices-filters {

@@ -1,213 +1,251 @@
-// Devices View Controller - Network Overview
+// Simplified View Controllers using centralized store
+
+// Devices Controller
 class DevicesController {
     constructor() {
-        this.devices = [];
-        this.filteredDevices = [];
+        this.filteredSensors = [];
     }
 
     async init() {
-        await this.loadDevices();
-        this.setupEventListeners();
-        this.renderDevicesTable();
+        this._setupEventListeners();
+        this._loadDevices();
+        this._populateTypeFilter();
     }
 
-    async loadDevices() {
-        try {
-            const sensors = await window.api.getSensors();
-            this.devices = sensors.map(sensor => ({
-                id: sensor.sensor_id,
-                name: sensor.sensor_id,
-                location: sensor.location,
-                type: 'sensor',
-                subtype: sensor.sensor_type,
-                status: 'online',
-                lastSeen: new Date(),
-                lastValue: null
-            }));
-
-            // Load latest values and update status
-            await this.updateDeviceStatus();
-            this.filteredDevices = [...this.devices];
-
-        } catch (error) {
-            console.error('Failed to load devices:', error);
-        }
-    }
-
-    async updateDeviceStatus() {
-        for (const device of this.devices) {
-            try {
-                const data = await window.api.getSensorData(device.id, 1);
-                if (data && data.length > 0) {
-                    device.lastValue = data[0].value;
-                    device.lastSeen = new Date(data[0].timestamp);
-                    
-                    // Determine online/offline status based on last seen time
-                    const timeSinceLastSeen = Date.now() - device.lastSeen.getTime();
-                    device.status = timeSinceLastSeen > 300000 ? 'offline' : 'online'; // 5 minutes threshold
-                } else {
-                    device.status = 'offline';
-                }
-            } catch (error) {
-                console.error(`Failed to update status for device ${device.id}:`, error);
-                device.status = 'offline';
-            }
-        }
-    }
-
-    setupEventListeners() {
-        // Filter controls
+    _populateTypeFilter() {
         const typeFilter = document.getElementById('deviceTypeFilter');
-        const statusFilter = document.getElementById('deviceStatusFilter');
-        const searchInput = document.getElementById('deviceSearch');
+        if (!typeFilter) return;
 
-        if (typeFilter) {
-            typeFilter.addEventListener('change', () => this.applyFilters());
+        // Remember the current selection
+        const currentSelection = typeFilter.value;
+        
+        const sensors = window.store.getSensors();
+        const uniqueTypes = [...new Set(sensors.map(sensor => sensor.type))];
+        
+        // Only rebuild if the available types have actually changed
+        const currentOptions = Array.from(typeFilter.options).slice(1).map(opt => opt.value);
+        const typesChanged = uniqueTypes.length !== currentOptions.length || 
+                           !uniqueTypes.every(type => currentOptions.includes(type));
+        
+        if (typesChanged) {
+            typeFilter.innerHTML = '<option value="">All Types</option>' +
+                uniqueTypes.map(type => 
+                    `<option value="${type}">${type.charAt(0).toUpperCase() + type.slice(1)}</option>`
+                ).join('');
+            
+            // Restore the previous selection if it still exists
+            if (currentSelection && uniqueTypes.includes(currentSelection)) {
+                typeFilter.value = currentSelection;
+            }
         }
-        if (statusFilter) {
-            statusFilter.addEventListener('change', () => this.applyFilters());
-        }
-        if (searchInput) {
-            searchInput.addEventListener('input', () => this.applyFilters());
-        }
+    }
 
-        // Real-time updates
-        window.addEventListener('sensorUpdate', (event) => {
-            this.handleDeviceUpdate(event.detail);
+    _setupEventListeners() {
+        // Subscribe to store updates
+        window.store.subscribe('sensors', (sensors) => {
+            // Preserve current filter state
+            const currentFilters = this._getCurrentFilterState();
+            
+            this.filteredSensors = [...sensors];
+            this._populateTypeFilter();
+            
+            // Restore filters after a brief delay to ensure DOM is updated
+            setTimeout(() => {
+                const typeFilter = document.getElementById('deviceTypeFilter');
+                const statusFilter = document.getElementById('deviceStatusFilter');
+                const searchFilter = document.getElementById('deviceSearch');
+                
+                if (typeFilter && currentFilters.type) typeFilter.value = currentFilters.type;
+                if (statusFilter && currentFilters.status) statusFilter.value = currentFilters.status;
+                if (searchFilter && currentFilters.search) searchFilter.value = currentFilters.search;
+                
+                this._applyFilters();
+            }, 50);
         });
-        // Sensors list snapshot (on connect)
-        window.addEventListener('sensorsList', (event) => {
-            const list = event.detail || [];
-            list.forEach(s => this.addOrUpdateDevice(s));
-            this.applyFilters();
-        });
-        // Single sensor connected event
-        window.addEventListener('sensorConnected', (event) => {
-            const sensor = event.detail;
-            if (sensor) {
-                this.addOrUpdateDevice(sensor);
-                this.applyFilters();
+
+        // Filter controls
+        ['deviceTypeFilter', 'deviceStatusFilter', 'deviceSearch'].forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                const event = id === 'deviceSearch' ? 'input' : 'change';
+                element.addEventListener(event, () => this._applyFilters());
             }
         });
     }
 
-    addOrUpdateDevice(sensorMeta) {
-        if (!sensorMeta || !sensorMeta.sensor_id) return;
-
-        let device = this.devices.find(d => d.id === sensorMeta.sensor_id);
-        if (!device) {
-            device = {
-                id: sensorMeta.sensor_id,
-                name: sensorMeta.sensor_id,
-                location: sensorMeta.location || 'unknown',
-                type: 'sensor',
-                subtype: sensorMeta.sensor_type || 'unknown',
-                status: sensorMeta.status || 'online',
-                lastSeen: new Date(),
-                lastValue: null
-            };
-            this.devices.push(device);
-        } else {
-            device.location = sensorMeta.location || device.location;
-            device.subtype = sensorMeta.sensor_type || device.subtype;
-            device.status = sensorMeta.status || device.status;
+    async _loadDevices() {
+        try {
+            // Get sensors from store
+            this.filteredSensors = window.store.getSensors() || [];
+            console.log('Loaded devices:', this.filteredSensors.length);
+            
+            // Apply current filters
+            this._applyFilters();
+            
+            // Update the filter info
+            this._updateFilterInfo();
+            
+        } catch (error) {
+            console.error('Error loading devices:', error);
+            this.filteredSensors = [];
+            this._renderDevicesTable();
         }
     }
 
-    applyFilters() {
-        const typeFilter = document.getElementById('deviceTypeFilter')?.value || '';
-        const statusFilter = document.getElementById('deviceStatusFilter')?.value || '';
-        const searchTerm = document.getElementById('deviceSearch')?.value.toLowerCase() || '';
+    _getCurrentFilterState() {
+        return {
+            type: document.getElementById('deviceTypeFilter')?.value || '',
+            status: document.getElementById('deviceStatusFilter')?.value || '',
+            search: document.getElementById('deviceSearch')?.value || ''
+        };
+    }
 
-        this.filteredDevices = this.devices.filter(device => {
-            const matchesType = !typeFilter || device.type === typeFilter;
-            const matchesStatus = !statusFilter || device.status === statusFilter;
+    _applyFilters() {
+        const filters = this._getCurrentFilterState();
+
+        const allSensors = window.store.getSensors();
+        this.filteredSensors = allSensors.filter(sensor => {
+            // Type filter
+            const matchesType = !filters.type || (sensor.type && sensor.type.toLowerCase() === filters.type.toLowerCase());
+            
+            // Status filter
+            const sensorStatus = sensor.status || 'offline';
+            const matchesStatus = !filters.status || sensorStatus.toLowerCase() === filters.status.toLowerCase();
+            
+            // Search filter
+            const searchTerm = filters.search.toLowerCase();
             const matchesSearch = !searchTerm || 
-                device.id.toLowerCase().includes(searchTerm) ||
-                device.name.toLowerCase().includes(searchTerm) ||
-                device.location.toLowerCase().includes(searchTerm);
+                (sensor.id && sensor.id.toLowerCase().includes(searchTerm)) ||
+                (sensor.location && sensor.location.toLowerCase().includes(searchTerm)) ||
+                (sensor.type && sensor.type.toLowerCase().includes(searchTerm)) ||
+                (sensor.name && sensor.name.toLowerCase().includes(searchTerm));
 
             return matchesType && matchesStatus && matchesSearch;
         });
 
-        this.renderDevicesTable();
+        this._renderDevicesTable();
+        
+        // Update filter info
+        this._updateFilterInfo();
     }
 
-    renderDevicesTable() {
+    _updateFilterInfo() {
+        const totalSensors = window.store.getSensors().length;
+        const filteredCount = this.filteredSensors.length;
+        
+        const filterInfoElement = document.getElementById('deviceFilterInfo');
+        if (filterInfoElement) {
+            const onlineCount = this.filteredSensors.filter(s => s.status === 'online').length;
+            const offlineCount = filteredCount - onlineCount;
+            
+            filterInfoElement.textContent = `Showing ${filteredCount} of ${totalSensors} devices (${onlineCount} online, ${offlineCount} offline)`;
+        }
+        
+        console.log(`Showing ${filteredCount} of ${totalSensors} devices`);
+    }
+
+    refreshDevices() {
+        console.log('Refreshing devices...');
+        
+        // Store current filter state before refresh
+        const currentFilters = this._getCurrentFilterState();
+        
+        this._loadDevices();
+        this._populateTypeFilter();
+        
+        // Restore filter state after refresh
+        setTimeout(() => {
+            const typeFilter = document.getElementById('deviceTypeFilter');
+            const statusFilter = document.getElementById('deviceStatusFilter');
+            const searchFilter = document.getElementById('deviceSearch');
+            
+            if (typeFilter && currentFilters.type) typeFilter.value = currentFilters.type;
+            if (statusFilter && currentFilters.status) statusFilter.value = currentFilters.status;
+            if (searchFilter && currentFilters.search) searchFilter.value = currentFilters.search;
+            
+            // Reapply filters with restored state
+            this._applyFilters();
+        }, 100);
+        
+        // Show a brief feedback
+        const filterInfoElement = document.getElementById('deviceFilterInfo');
+        if (filterInfoElement) {
+            const originalText = filterInfoElement.textContent;
+            filterInfoElement.textContent = 'Refreshing...';
+            setTimeout(() => {
+                this._updateFilterInfo();
+            }, 500);
+        }
+    }
+
+    _renderDevicesTable() {
         const tableBody = document.getElementById('devicesTableBody');
         if (!tableBody) return;
 
-        if (this.filteredDevices.length === 0) {
-            tableBody.innerHTML = '<tr><td colspan="7">No devices found</td></tr>';
+        if (this.filteredSensors.length === 0) {
+            tableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #666;">No devices found</td></tr>';
             return;
         }
 
-        tableBody.innerHTML = this.filteredDevices.map(device => `
-            <tr class="device-row ${device.status}">
+        tableBody.innerHTML = this.filteredSensors.map(sensor => `
+            <tr class="device-row ${sensor.status || 'offline'}">
                 <td class="device-id">
-                    <span class="status-indicator ${device.status}"></span>
-                    ${device.id}
+                    <span class="status-indicator ${sensor.status || 'offline'}"></span>
+                    ${sensor.id}
                 </td>
-                <td>${device.name}</td>
-                <td>${device.location}</td>
+                <td>${sensor.name || sensor.id}</td>
+                <td>${sensor.location || 'Unknown'}</td>
                 <td>
-                    <span class="device-type-badge ${device.type}">
-                        ${device.subtype || device.type}
+                    <span class="device-type-badge sensor">
+                        ${(sensor.type || 'sensor').charAt(0).toUpperCase() + (sensor.type || 'sensor').slice(1)}
                     </span>
                 </td>
                 <td>
-                    <span class="status-badge ${device.status}">
-                        ${device.status.charAt(0).toUpperCase() + device.status.slice(1)}
+                    <span class="status-badge ${sensor.status || 'offline'}">
+                        ${((sensor.status || 'offline').charAt(0).toUpperCase() + (sensor.status || 'offline').slice(1))}
                     </span>
                 </td>
-                <td>${device.lastSeen ? device.lastSeen.toLocaleString() : 'Never'}</td>
+                <td>${sensor.lastUpdate ? new Date(sensor.lastUpdate).toLocaleString() : 'Never'}</td>
                 <td>
-                    <button class="btn btn-sm" onclick="window.devicesController.showDeviceDetails('${device.id}')">
+                    <button class="btn btn-sm" onclick="window.devicesController.showDeviceDetails('${sensor.id}')">
                         Details
                     </button>
-                    ${device.status === 'offline' ? 
-                        `<button class="btn btn-sm btn-warning" onclick="window.devicesController.pingDevice('${device.id}')">Ping</button>` : 
-                        ''}
                 </td>
             </tr>
         `).join('');
     }
 
-    handleDeviceUpdate(data) {
-        let device = this.devices.find(d => d.id === data.sensor_id);
-        if (!device) {
-            // add missing device
-            this.addOrUpdateDevice({
-                sensor_id: data.sensor_id,
-                sensor_type: data.data?.type || 'unknown',
-                location: data.data?.location || 'unknown',
-                status: 'online'
-            });
-            device = this.devices.find(d => d.id === data.sensor_id);
+    showDeviceDetails(sensorId) {
+        const sensor = window.store.getSensor(sensorId);
+        if (!sensor) {
+            alert('Device not found');
+            return;
         }
 
-        if (device) {
-            device.lastValue = data.data.value || data.value || null;
-            device.lastSeen = new Date(data.timestamp);
-            device.status = 'online';
+        const formatValue = (value, type) => {
+            if (value === null || value === undefined) return 'No Data';
+            if (window.api && window.api.formatSensorValue) {
+                return window.api.formatSensorValue(value, type);
+            }
+            return value.toString();
+        };
 
-            // Re-apply filters and re-render
-            this.applyFilters();
-        }
-    }
+        const details = [
+            `Device Details:`,
+            ``,
+            `ID: ${sensor.id}`,
+            `Name: ${sensor.name || sensor.id}`,
+            `Type: ${sensor.type || 'Unknown'}`,
+            `Location: ${sensor.location || 'Unknown'}`,
+            `Status: ${sensor.status || 'Offline'}`,
+            `Last Value: ${formatValue(sensor.lastValue, sensor.type)}`,
+            `Last Update: ${sensor.lastUpdate ? new Date(sensor.lastUpdate).toLocaleString() : 'Never'}`,
+            ``,
+            `Raw Data:`,
+            JSON.stringify(sensor, null, 2)
+        ].join('\n');
 
-    showDeviceDetails(deviceId) {
-        const device = this.devices.find(d => d.id === deviceId);
-        if (!device) return;
-
-        // Show device details (could be expanded to a modal)
-        alert(`Device Details:\n\nID: ${device.id}\nName: ${device.name}\nLocation: ${device.location}\nType: ${device.subtype}\nStatus: ${device.status}\nLast Seen: ${device.lastSeen ? device.lastSeen.toLocaleString() : 'Never'}\nLast Value: ${device.lastValue !== null ? window.api.formatSensorValue(device.lastValue, device.subtype) : 'No Data'}`);
-    }
-
-    async pingDevice(deviceId) {
-        // Simulate pinging a device
-        alert(`Pinging device ${deviceId}...`);
-        // In a real implementation, this might send a command to the device
+        alert(details);
     }
 }
 
@@ -216,90 +254,101 @@ class SensorHistoryController {
     constructor() {
         this.charts = {};
         this.sensorTypes = ['humidity', 'vibration', 'stress'];
-        this.devices = [];
-        this.updateThrottle = new Map(); // Throttle updates per device
-        this.throttleDelay = 1000; // 1 second throttle
     }
 
     async init() {
-        await this.loadDevices();
-        this.setupEventListeners();
-        this.initializeCharts();
-        await this.loadHistoricalData();
+        this._setupEventListeners();
+        this._initializeCharts();
+        this._loadDevices();
+        await this._loadHistoricalData();
     }
 
-    async loadDevices() {
-        try {
-            const sensors = await window.api.getSensors();
-            this.devices = sensors;
-            this.populateDeviceSelect();
-        } catch (error) {
-            console.error('Failed to load devices:', error);
-        }
-    }
+    _setupEventListeners() {
+        // Subscribe to store updates for real-time data
+        window.store.subscribe('sensorData', (data) => this._handleSensorUpdate(data));
+        window.store.subscribe('sensors', (sensors) => this._loadDevices());
 
-    populateDeviceSelect() {
-        const deviceSelect = document.getElementById('deviceSelect');
-        if (!deviceSelect) return;
-
-        deviceSelect.innerHTML = this.devices.map(device => 
-            `<option value="${device.sensor_id}">${device.sensor_id} (${device.sensor_type})</option>`
-        ).join('');
-    }
-
-    setupEventListeners() {
+        // Control event listeners
         const sensorTypeSelect = document.getElementById('sensorTypeSelect');
         const dateRangeSelect = document.getElementById('dateRangeSelect');
         const deviceSelect = document.getElementById('deviceSelect');
         const exportBtn = document.getElementById('exportDataBtn');
+        const customStartDate = document.getElementById('customStartDate');
+        const customEndDate = document.getElementById('customEndDate');
 
         if (sensorTypeSelect) {
-            sensorTypeSelect.addEventListener('change', () => this.updateChartVisibility());
+            sensorTypeSelect.addEventListener('change', () => {
+                this._updateChartVisibility();
+                this._loadHistoricalData();
+            });
         }
 
         if (dateRangeSelect) {
             dateRangeSelect.addEventListener('change', (e) => {
                 const customDates = document.querySelectorAll('#customStartDate, #customEndDate');
                 customDates.forEach(input => {
-                    input.style.display = e.target.value === 'custom' ? 'block' : 'none';
+                    input.style.display = e.target.value === 'custom' ? 'inline-block' : 'none';
                 });
-                this.loadHistoricalData();
+                this._loadHistoricalData();
             });
         }
 
+        if (customStartDate) {
+            customStartDate.addEventListener('change', () => this._loadHistoricalData());
+        }
+
+        if (customEndDate) {
+            customEndDate.addEventListener('change', () => this._loadHistoricalData());
+        }
+
         if (deviceSelect) {
-            deviceSelect.addEventListener('change', () => this.loadHistoricalData());
+            deviceSelect.addEventListener('change', () => this._loadHistoricalData());
         }
 
         if (exportBtn) {
-            exportBtn.addEventListener('click', () => this.exportData());
+            exportBtn.addEventListener('click', () => this._exportData());
         }
-
-        // Real-time updates
-        window.addEventListener('sensorUpdate', (event) => {
-            this.handleSensorUpdate(event.detail);
-        });
     }
 
-    initializeCharts() {
+    _loadDevices() {
+        const deviceSelect = document.getElementById('deviceSelect');
+        if (!deviceSelect) return;
+
+        const sensors = window.store.getSensors();
+        const selectedType = document.getElementById('sensorTypeSelect')?.value || '';
+        
+        // Filter sensors by selected type if specified
+        const filteredSensors = selectedType ? 
+            sensors.filter(sensor => sensor.type === selectedType) : 
+            sensors;
+
+        // Remember previously selected devices
+        const previouslySelected = Array.from(deviceSelect.selectedOptions || [])
+            .map(option => option.value);
+
+        deviceSelect.innerHTML = filteredSensors.map(sensor => 
+            `<option value="${sensor.id}" ${previouslySelected.includes(sensor.id) ? 'selected' : ''}>
+                ${sensor.id} (${sensor.type} - ${sensor.location})
+            </option>`
+        ).join('');
+
+        // If no devices are available, show a message
+        if (filteredSensors.length === 0) {
+            deviceSelect.innerHTML = '<option disabled>No sensors available</option>';
+        }
+    }
+
+    _initializeCharts() {
         this.sensorTypes.forEach(type => {
             const canvasId = `${type}Chart`;
             const chart = window.chartManager.createChart(canvasId, 'line', {
                 datasets: []
             }, {
                 scales: {
-                    x: {
-                        type: 'time',
-                        time: {
-                            unit: 'hour'
-                        }
-                    },
-                    y: {
+                    x: { type: 'time', time: { unit: 'hour' } },
+                    y: { 
                         beginAtZero: true,
-                        title: {
-                            display: true,
-                            text: this.getYAxisLabel(type)
-                        }
+                        title: { display: true, text: this._getYAxisLabel(type) }
                     }
                 },
                 plugins: {
@@ -314,40 +363,74 @@ class SensorHistoryController {
         });
     }
 
-    async loadHistoricalData() {
+    async _loadHistoricalData() {
         const dateRange = document.getElementById('dateRangeSelect')?.value || 'week';
-        const selectedDevices = Array.from(document.getElementById('deviceSelect')?.selectedOptions || [])
-            .map(option => option.value);
+        const selectedType = document.getElementById('sensorTypeSelect')?.value || '';
+        const deviceSelect = document.getElementById('deviceSelect');
+        
+        // Get selected devices, or all if none selected
+        const selectedDevices = deviceSelect ? 
+            Array.from(deviceSelect.selectedOptions).map(option => option.value) : [];
 
-        // Filter devices by selected ones or show all if none selected
+        const sensors = window.store.getSensors();
+        
+        // Filter by sensor type first
+        let filteredSensors = selectedType ? 
+            sensors.filter(s => s.type === selectedType) : 
+            sensors;
+        
+        // Then filter by selected devices if any
         const devicesToLoad = selectedDevices.length > 0 ? 
-            this.devices.filter(d => selectedDevices.includes(d.sensor_id)) : 
-            this.devices;
+            filteredSensors.filter(s => selectedDevices.includes(s.id)) : 
+            filteredSensors;
 
-        for (const type of this.sensorTypes) {
-            const typeDevices = devicesToLoad.filter(d => d.sensor_type === type);
+        // Determine which chart types to update
+        const chartTypesToUpdate = selectedType ? [selectedType] : this.sensorTypes;
+
+        for (const type of chartTypesToUpdate) {
+            const typeSensors = devicesToLoad.filter(s => s.type === type);
             const datasets = [];
 
-            for (const device of typeDevices) {
+            for (const sensor of typeSensors) {
                 try {
-                    const limit = this.getLimitForDateRange(dateRange);
-                    const data = await window.api.getSensorData(device.sensor_id, limit);
+                    const limit = this._getLimitForDateRange(dateRange);
+                    const data = await window.api.getSensorData(sensor.id, limit);
                     
                     if (data && data.length > 0) {
-                        datasets.push({
-                            label: device.sensor_id,
-                            data: data.map(point => ({
-                                x: new Date(point.timestamp),
-                                y: point.value
-                            })).reverse(),
-                            borderColor: this.getColorForDevice(device.sensor_id),
-                            backgroundColor: this.getColorForDevice(device.sensor_id) + '20',
-                            fill: false,
-                            tension: 0.1
-                        });
+                        // Filter by custom date range if specified
+                        let filteredData = data;
+                        if (dateRange === 'custom') {
+                            const startDate = document.getElementById('customStartDate')?.value;
+                            const endDate = document.getElementById('customEndDate')?.value;
+                            
+                            if (startDate || endDate) {
+                                filteredData = data.filter(point => {
+                                    const pointDate = new Date(point.timestamp);
+                                    if (startDate && pointDate < new Date(startDate)) return false;
+                                    if (endDate && pointDate > new Date(endDate + 'T23:59:59')) return false;
+                                    return true;
+                                });
+                            }
+                        }
+
+                        if (filteredData.length > 0) {
+                            datasets.push({
+                                label: `${sensor.id} (${sensor.location})`,
+                                data: filteredData.map(point => ({
+                                    x: new Date(point.timestamp),
+                                    y: point.value
+                                })).reverse(),
+                                borderColor: this._getColorForDevice(sensor.id),
+                                backgroundColor: this._getColorForDevice(sensor.id) + '20',
+                                fill: false,
+                                tension: 0.1,
+                                pointRadius: 2,
+                                pointHoverRadius: 4
+                            });
+                        }
                     }
                 } catch (error) {
-                    console.error(`Failed to load data for ${device.sensor_id}:`, error);
+                    console.error(`Failed to load data for ${sensor.id}:`, error);
                 }
             }
 
@@ -355,126 +438,135 @@ class SensorHistoryController {
                 this.charts[type].data.datasets = datasets;
                 this.charts[type].update();
                 
-                // Update chart info
                 const infoElement = document.getElementById(`${type}Info`);
                 if (infoElement) {
-                    infoElement.textContent = `${datasets.length} sensor(s), ${dateRange} range`;
+                    const totalPoints = datasets.reduce((sum, ds) => sum + ds.data.length, 0);
+                    infoElement.textContent = `${datasets.length} sensor(s), ${totalPoints} data points, ${dateRange} range`;
                 }
             }
         }
 
-        this.updateChartVisibility();
+        this._updateChartVisibility();
     }
 
-    updateChartVisibility() {
+    _updateChartVisibility() {
         const selectedType = document.getElementById('sensorTypeSelect')?.value || '';
         
         this.sensorTypes.forEach(type => {
             const card = document.getElementById(`${type}ChartCard`);
             if (card) {
-                card.style.display = (!selectedType || selectedType === type) ? 'block' : 'none';
+                const shouldShow = !selectedType || selectedType === type;
+                card.style.display = shouldShow ? 'block' : 'none';
+                
+                // Update chart info when showing
+                if (shouldShow && this.charts[type]) {
+                    const datasets = this.charts[type].data.datasets;
+                    const infoElement = document.getElementById(`${type}Info`);
+                    if (infoElement) {
+                        const dateRange = document.getElementById('dateRangeSelect')?.value || 'week';
+                        infoElement.textContent = `${datasets.length} sensor(s), ${dateRange} range`;
+                    }
+                }
             }
         });
+
+        // Update device select to show only relevant sensors
+        this._loadDevices();
     }
 
-    getLimitForDateRange(range) {
+    _handleSensorUpdate(data) {
+        const { sensorId, sensor } = data;
+        if (!sensor) return;
+
+        // Check if this sensor type is currently being displayed
+        const selectedType = document.getElementById('sensorTypeSelect')?.value || '';
+        if (selectedType && sensor.type !== selectedType) return;
+
+        // Check if this sensor is in the selected devices list
+        const deviceSelect = document.getElementById('deviceSelect');
+        if (deviceSelect) {
+            const selectedDevices = Array.from(deviceSelect.selectedOptions).map(option => option.value);
+            if (selectedDevices.length > 0 && !selectedDevices.includes(sensorId)) return;
+        }
+
+        // Find the appropriate chart
+        const chart = this.charts[sensor.type];
+        if (!chart) return;
+
+        // Find or create dataset for this sensor
+        let dataset = chart.data.datasets.find(d => d.label.startsWith(sensorId));
+        if (!dataset) {
+            dataset = {
+                label: `${sensorId} (${sensor.location})`,
+                data: [],
+                borderColor: this._getColorForDevice(sensorId),
+                backgroundColor: this._getColorForDevice(sensorId) + '20',
+                fill: false,
+                tension: 0.1,
+                pointRadius: 2,
+                pointHoverRadius: 4
+            };
+            chart.data.datasets.push(dataset);
+        }
+
+        // Add new data point
+        if (sensor.lastValue !== null && sensor.lastUpdate) {
+            const newPoint = {
+                x: sensor.lastUpdate,
+                y: sensor.lastValue
+            };
+            
+            dataset.data.push(newPoint);
+
+            // Keep only recent data points (based on current date range)
+            const dateRange = document.getElementById('dateRangeSelect')?.value || 'week';
+            const maxPoints = this._getLimitForDateRange(dateRange);
+            if (dataset.data.length > maxPoints) {
+                dataset.data = dataset.data.slice(-maxPoints);
+            }
+
+            // Sort by timestamp to maintain order
+            dataset.data.sort((a, b) => a.x.getTime() - b.x.getTime());
+
+            chart.update('none');
+            
+            // Update chart info
+            const infoElement = document.getElementById(`${sensor.type}Info`);
+            if (infoElement) {
+                const datasets = chart.data.datasets;
+                const totalPoints = datasets.reduce((sum, ds) => sum + ds.data.length, 0);
+                infoElement.textContent = `${datasets.length} sensor(s), ${totalPoints} data points, ${dateRange} range`;
+            }
+        }
+    }
+
+    _getLimitForDateRange(range) {
         switch (range) {
             case 'day': return 288; // 24 hours * 12 (5-minute intervals)
             case 'week': return 2016; // 7 days * 288
             case 'month': return 8640; // 30 days * 288
+            case 'custom': return 10000; // Large limit for custom ranges
             default: return 2016;
         }
     }
 
-    getYAxisLabel(type) {
-        switch (type) {
-            case 'humidity': return 'Humidity (%)';
-            case 'vibration': return 'Vibration (Hz)';
-            case 'stress': return 'Stress (MPa)';
-            default: return 'Value';
-        }
+    _getYAxisLabel(type) {
+        const labels = {
+            humidity: 'Humidity (%)',
+            vibration: 'Vibration (Hz)',
+            stress: 'Stress (MPa)'
+        };
+        return labels[type] || 'Value';
     }
 
-    getColorForDevice(deviceId) {
-        // Generate consistent colors for devices
+    _getColorForDevice(deviceId) {
         const colors = ['#3498db', '#e74c3c', '#f39c12', '#2ecc71', '#9b59b6', '#1abc9c'];
         const hash = deviceId.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
         return colors[hash % colors.length];
     }
 
-    exportData() {
-        // Simple CSV export implementation
+    _exportData() {
         alert('Export functionality would generate CSV with current chart data');
-        // In a real implementation, this would collect all visible chart data and generate a CSV file
-    }
-
-    handleSensorUpdate(data) {
-        // Check if this update is for a sensor we're currently displaying
-        const selectedDevices = Array.from(document.getElementById('deviceSelect')?.selectedOptions || [])
-            .map(option => option.value);
-        
-        // If no devices selected, show all, otherwise only show selected
-        const shouldUpdate = selectedDevices.length === 0 || selectedDevices.includes(data.sensor_id);
-        
-        if (!shouldUpdate) return;
-
-        // Skip if view is not active to save resources
-        if (document.getElementById('sensor-historyView')?.style.display === 'none') return;
-
-        // Throttle updates to prevent excessive chart redraws
-        const now = Date.now();
-        const lastUpdate = this.updateThrottle.get(data.sensor_id) || 0;
-        
-        if (now - lastUpdate < this.throttleDelay) {
-            return; // Skip this update due to throttling
-        }
-        
-        this.updateThrottle.set(data.sensor_id, now);
-
-        // Find the device that matches this update
-        const device = this.devices.find(d => d.sensor_id === data.sensor_id);
-        if (!device) return;
-
-        // Add new data point to the appropriate chart
-        const sensorType = device.sensor_type;
-        const chart = this.charts[sensorType];
-        
-        if (chart) {
-            // Find the dataset for this device
-            let dataset = chart.data.datasets.find(d => d.label === data.sensor_id);
-            
-            if (!dataset) {
-                // Create new dataset if it doesn't exist
-                dataset = {
-                    label: data.sensor_id,
-                    data: [],
-                    borderColor: this.getColorForDevice(data.sensor_id),
-                    backgroundColor: this.getColorForDevice(data.sensor_id) + '20',
-                    fill: false,
-                    tension: 0.1
-                };
-                chart.data.datasets.push(dataset);
-            }
-
-            // Add new data point
-            const newPoint = {
-                x: new Date(data.timestamp),
-                y: data.value || data.data?.value || 0 // Handle different data structures
-            };
-            
-            dataset.data.push(newPoint);
-
-            // Keep only recent data points (e.g., last 1000 points)
-            if (dataset.data.length > 1000) {
-                dataset.data = dataset.data.slice(-1000);
-            }
-
-            // Sort data by timestamp to maintain order
-            dataset.data.sort((a, b) => a.x.getTime() - b.x.getTime());
-
-            // Update the chart with animation disabled for better performance
-            chart.update('none');
-        }
     }
 }
 
@@ -483,52 +575,53 @@ class AlarmHistoryController {
     constructor() {
         this.alarms = [];
         this.timelineChart = null;
-        this.lastUpdate = 0;
-        this.updateThrottle = 2000; // 2 second throttle for alarm updates
     }
 
     async init() {
-        await this.loadAlarmHistory();
-        this.setupEventListeners();
-        this.initializeTimelineChart();
-        this.updateAlarmStats();
-        this.renderAlarmTable();
+        this._setupEventListeners();
+        await this._loadAlarmHistory();
+        this._initializeTimelineChart();
+        this._updateAlarmStats();
+        this._renderAlarmTable();
     }
 
-    async loadAlarmHistory() {
+    _setupEventListeners() {
+        // Subscribe to store updates
+        window.store.subscribe('alarms', (alarms) => {
+            this.alarms = alarms;
+            this._updateAlarmStats();
+            this._updateTimelineChart();
+            this._renderAlarmTable();
+        });
+
+        window.store.subscribe('newAlarm', () => {
+            this._populateDeviceFilter();
+        });
+
+        // Control event listeners
+        ['alarmDateRange', 'alarmDeviceFilter', 'alarmLevelFilter'].forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.addEventListener('change', () => this._applyFilters());
+            }
+        });
+
+        const exportBtn = document.getElementById('exportAlarmsBtn');
+        if (exportBtn) {
+            exportBtn.addEventListener('click', () => this._exportAlarms());
+        }
+    }
+
+    async _loadAlarmHistory() {
         try {
-            this.alarms = await window.api.getAlarms(1000); // Load more alarms for history
+            const alarms = await window.api.getAlarms(1000);
+            window.store.setAlarms(alarms);
         } catch (error) {
             console.error('Failed to load alarm history:', error);
         }
     }
 
-    setupEventListeners() {
-        const dateRangeSelect = document.getElementById('alarmDateRange');
-        const deviceFilter = document.getElementById('alarmDeviceFilter');
-        const levelFilter = document.getElementById('alarmLevelFilter');
-        const exportBtn = document.getElementById('exportAlarmsBtn');
-
-        [dateRangeSelect, deviceFilter, levelFilter].forEach(element => {
-            if (element) {
-                element.addEventListener('change', () => this.applyFilters());
-            }
-        });
-
-        if (exportBtn) {
-            exportBtn.addEventListener('click', () => this.exportAlarms());
-        }
-
-        // Populate device filter
-        this.populateDeviceFilter();
-
-        // Real-time updates
-        window.addEventListener('alarmUpdate', (event) => {
-            this.handleAlarmUpdate(event.detail);
-        });
-    }
-
-    populateDeviceFilter() {
+    _populateDeviceFilter() {
         const deviceFilter = document.getElementById('alarmDeviceFilter');
         if (!deviceFilter) return;
 
@@ -539,37 +632,21 @@ class AlarmHistoryController {
             ).join('');
     }
 
-    initializeTimelineChart() {
+    _initializeTimelineChart() {
         this.timelineChart = window.chartManager.createChart('alarmTimelineChart', 'bar', {
             datasets: []
         }, {
             scales: {
-                x: {
-                    type: 'time',
-                    time: {
-                        unit: 'day'
-                    }
-                },
-                y: {
+                x: { type: 'time', time: { unit: 'day' } },
+                y: { 
                     beginAtZero: true,
-                    title: {
-                        display: true,
-                        text: 'Number of Alarms'
-                    }
-                }
-            },
-            plugins: {
-                title: {
-                    display: false,
-                    text: 'Alarm Timeline'
+                    title: { display: true, text: 'Number of Alarms' }
                 }
             }
         });
-
-        this.updateTimelineChart();
     }
 
-    updateTimelineChart() {
+    _updateTimelineChart() {
         if (!this.timelineChart) return;
 
         // Group alarms by date and level
@@ -586,47 +663,29 @@ class AlarmHistoryController {
         const datasets = [
             {
                 label: 'Critical',
-                data: dates.map(date => ({
-                    x: new Date(date),
-                    y: alarmsByDate[date].critical
-                })),
-                backgroundColor: '#ff4757',
-                borderColor: '#ff4757'
+                data: dates.map(date => ({ x: new Date(date), y: alarmsByDate[date].critical })),
+                backgroundColor: '#ff4757'
             },
             {
                 label: 'Warning', 
-                data: dates.map(date => ({
-                    x: new Date(date),
-                    y: alarmsByDate[date].warning
-                })),
-                backgroundColor: '#ffa502',
-                borderColor: '#ffa502'
-            },
-            // {
-            //     label: 'Info',
-            //     data: dates.map(date => ({
-            //         x: new Date(date),
-            //         y: alarmsByDate[date].info
-            //     })),
-            //     backgroundColor: '#3742fa',
-            //     borderColor: '#3742fa'
-            // }
+                data: dates.map(date => ({ x: new Date(date), y: alarmsByDate[date].warning })),
+                backgroundColor: '#ffa502'
+            }
         ];
 
         this.timelineChart.data.datasets = datasets;
         this.timelineChart.update();
     }
 
-    updateAlarmStats() {
+    _updateAlarmStats() {
         const statsContainer = document.getElementById('alarmStats');
         if (!statsContainer) return;
 
-        // Calculate statistics
         const totalAlarms = this.alarms.length;
         const criticalAlarms = this.alarms.filter(a => a.level === 'critical').length;
         const warningAlarms = this.alarms.filter(a => a.level === 'warning').length;
         
-        // Alarms by device
+        // Find most active device
         const alarmsByDevice = {};
         this.alarms.forEach(alarm => {
             alarmsByDevice[alarm.sensor_id] = (alarmsByDevice[alarm.sensor_id] || 0) + 1;
@@ -656,19 +715,13 @@ class AlarmHistoryController {
         `;
     }
 
-    applyFilters() {
-        // Filter logic would be implemented here
-        this.renderAlarmTable();
-    }
-
-    renderAlarmTable() {
+    _renderAlarmTable() {
         const tableBody = document.getElementById('alarmHistoryBody');
         if (!tableBody) return;
 
-        // Apply current filters (simplified for this example)
-        const filteredAlarms = this.alarms.slice(0, 50); // Show first 50 for performance
+        const recentAlarms = this.alarms.slice(0, 50);
 
-        tableBody.innerHTML = filteredAlarms.map(alarm => `
+        tableBody.innerHTML = recentAlarms.map(alarm => `
             <tr>
                 <td>${new Date(alarm.timestamp).toLocaleString()}</td>
                 <td>${alarm.sensor_id}</td>
@@ -680,62 +733,11 @@ class AlarmHistoryController {
         `).join('');
     }
 
-    exportAlarms() {
+    _applyFilters() {
+        this._renderAlarmTable();
+    }
+
+    _exportAlarms() {
         alert('Alarm export functionality would generate CSV with alarm history data');
     }
-
-    handleAlarmUpdate(data) {
-        // Normalize alarm payload (server may send { alarm: { ... } } or top-level fields)
-        const incoming = data || {};
-        const alarmPayload = incoming.alarm || incoming;
-
-        const timestamp = alarmPayload.timestamp || incoming.timestamp || new Date().toISOString();
-        const sensor_id = alarmPayload.sensor_id || incoming.sensor_id || alarmPayload.sensor || null;
-        const level = alarmPayload.level || incoming.level || 'warning';
-        const message = alarmPayload.message || incoming.message || alarmPayload.msg || 'Alarm triggered';
-        const id = alarmPayload.id || incoming.id || null;
-        const acknowledged = alarmPayload.acknowledged || false;
-
-        const normalized = {
-            id,
-            timestamp,
-            sensor_id,
-            level,
-            message,
-            acknowledged
-        };
-
-        // Add new alarm to the beginning of the array
-        this.alarms.unshift(normalized);
-
-        // Keep only recent alarms (e.g., last 1000)
-        if (this.alarms.length > 1000) {
-            this.alarms = this.alarms.slice(0, 1000);
-        }
-
-        // Always refresh table so new alarms are visible immediately
-        this.renderAlarmTable();
-        this.populateDeviceFilter(); // Update device filter with new devices
-
-        // Throttle heavier updates (charts/stats) to prevent excessive redraws
-        const now = Date.now();
-        if (now - this.lastUpdate >= this.updateThrottle) {
-            this.lastUpdate = now;
-            this.updateAlarmStats();
-            this.updateTimelineChart();
-        } else {
-            // Schedule an update after the throttle delay to ensure charts/stats catch up
-            clearTimeout(this._scheduledAlarmUpdate);
-            this._scheduledAlarmUpdate = setTimeout(() => {
-                this.lastUpdate = Date.now();
-                this.updateAlarmStats();
-                this.updateTimelineChart();
-            }, this.updateThrottle - (now - this.lastUpdate));
-        }
-    }
 }
-
-// Global controller instances
-window.devicesController = new DevicesController();
-window.sensorHistoryController = new SensorHistoryController();
-window.alarmHistoryController = new AlarmHistoryController();
